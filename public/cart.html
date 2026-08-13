@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Petabyte | Carrinho</title>
+    <style>
+        :root {
+            --primary: #2563eb;
+            --primary-dark: #1d4ed8;
+            --secondary: #111827;
+            --bg: #f8fafc;
+            --card: #ffffff;
+            --text: #0f172a;
+            --border: #e2e8f0;
+            --success: #16a34a;
+        }
+
+        * { box-sizing: border-box; }
+        body {
+            margin: 0;
+            font-family: Arial, Helvetica, sans-serif;
+            background: var(--bg);
+            color: var(--text);
+            line-height: 1.6;
+        }
+
+        a { text-decoration: none; color: inherit; }
+        .container { width: min(980px, calc(100% - 2rem)); margin: 0 auto; }
+        header { background: linear-gradient(135deg, var(--secondary), #1e293b); color: white; padding: 1rem 0; }
+        .topbar { display: flex; justify-content: space-between; align-items: center; }
+        .brand { font-size: 1.3rem; font-weight: 700; }
+        .btn { padding: 0.8rem 1rem; border-radius: 999px; border: none; font-weight: 700; cursor: pointer; }
+        .btn-primary { background: var(--primary); color: white; }
+        .btn-secondary { background: white; color: var(--secondary); border: 1px solid var(--border); }
+        main { padding: 2rem 0; }
+        .card { background: white; border: 1px solid var(--border); border-radius: 1rem; padding: 1.2rem; box-shadow: 0 10px 25px rgba(15, 23, 42, 0.06); }
+        .cart-item { display: flex; justify-content: space-between; align-items: center; gap: 1rem; padding: 0.8rem 0; border-bottom: 1px solid var(--border); }
+        .cart-item:last-child { border-bottom: none; }
+        .cart-actions { display: flex; align-items: center; gap: 0.7rem; flex-wrap: wrap; }
+        .summary { margin-top: 1.2rem; padding-top: 1rem; border-top: 1px solid var(--border); }
+        .summary-row { display: flex; justify-content: space-between; margin: 0.4rem 0; }
+        .total { display: flex; justify-content: space-between; align-items: center; margin-top: 1rem; font-size: 1.1rem; }
+    </style>
+</head>
+<body data-page="cart">
+    <header>
+        <div class="container topbar">
+            <div class="brand">Petabyte</div>
+            <a class="btn btn-secondary" href="E-Commerce.html">Voltar à loja</a>
+        </div>
+    </header>
+
+    <main class="container">
+        <div class="card">
+            <h1>Carrinho</h1>
+            <div id="cartItems">Carregando...</div>
+            <div class="summary">
+                <div class="summary-row"><span>Subtotal</span><strong id="cartTotal">R$ 0,00</strong></div>
+                <div class="summary-row"><span>Frete</span><strong id="shippingValue">R$ 0,00</strong></div>
+                <div class="total">
+                    <strong>Total</strong>
+                    <strong id="finalTotal">R$ 0,00</strong>
+                </div>
+                <button class="btn btn-primary checkout-btn" style="margin-top:1rem;">Finalizar compra</button>
+            </div>
+        </div>
+    </main>
+
+    <script src="script.js"></script>
+</body>
+</html>

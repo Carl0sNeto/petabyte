@@ -1,0 +1,439 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Petabyte | E-Commerce</title>
+    <style>
+        :root {
+            --primary: #2563eb;
+            --primary-dark: #1d4ed8;
+            --secondary: #111827;
+            --bg: #f8fafc;
+            --card: #ffffff;
+            --text: #0f172a;
+            --muted: #64748b;
+            --success: #16a34a;
+            --border: #e2e8f0;
+        }
+
+        * { box-sizing: border-box; }
+        body {
+            margin: 0;
+            font-family: Arial, Helvetica, sans-serif;
+            background: var(--bg);
+            color: var(--text);
+            line-height: 1.6;
+        }
+
+        a { text-decoration: none; color: inherit; }
+        img { max-width: 100%; display: block; }
+
+        .container {
+            width: min(1180px, calc(100% - 2rem));
+            margin: 0 auto;
+        }
+
+        header {
+            background: linear-gradient(135deg, var(--secondary), #1e293b);
+            color: white;
+        }
+
+        .topbar {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 1rem 0;
+        }
+
+        .brand {
+            font-size: 1.4rem;
+            font-weight: 700;
+            letter-spacing: 0.04em;
+        }
+
+        nav {
+            display: flex;
+            gap: 1rem;
+            color: #dbeafe;
+        }
+
+        .hero {
+            display: grid;
+            grid-template-columns: 1.2fr 0.8fr;
+            gap: 2rem;
+            padding: 4rem 0;
+            align-items: center;
+        }
+
+        .hero h1 {
+            font-size: clamp(2rem, 4vw, 3rem);
+            margin: 0 0 1rem;
+        }
+
+        .hero p {
+            color: #cbd5e1;
+            font-size: 1.05rem;
+            margin-bottom: 1.5rem;
+        }
+
+        .buttons {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 0.8rem;
+        }
+
+        .btn {
+            padding: 0.8rem 1.1rem;
+            border-radius: 999px;
+            border: none;
+            font-weight: 700;
+            cursor: pointer;
+            transition: transform 0.2s ease;
+        }
+
+        .btn:hover { transform: translateY(-2px); }
+        .btn-primary { background: var(--primary); color: white; }
+        .btn-primary:hover { background: var(--primary-dark); }
+        .btn-secondary { background: white; color: var(--secondary); }
+        .cart-link {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.4rem;
+            background: rgba(255,255,255,0.12);
+            padding: 0.45rem 0.7rem;
+            border-radius: 999px;
+        }
+        .cart-count {
+            background: white;
+            color: var(--secondary);
+            border-radius: 999px;
+            min-width: 1.4rem;
+            text-align: center;
+            font-size: 0.85rem;
+            padding: 0.1rem 0.35rem;
+        }
+
+        .hero-card {
+            background: rgba(255,255,255,0.1);
+            border: 1px solid rgba(255,255,255,0.2);
+            padding: 1.2rem;
+            border-radius: 1.2rem;
+            backdrop-filter: blur(8px);
+        }
+
+        .hero-card h3 { margin-top: 0; }
+        .welcome-banner {
+            background: white;
+            border: 1px solid var(--border);
+            border-radius: 1rem;
+            padding: 0.9rem 1rem;
+            margin: 1rem 0 0;
+            color: var(--secondary);
+            box-shadow: 0 10px 25px rgba(15, 23, 42, 0.05);
+        }
+        .stats {
+            display: flex;
+            gap: 1rem;
+            margin-top: 1rem;
+            flex-wrap: wrap;
+        }
+
+        .stats span {
+            background: rgba(255,255,255,0.14);
+            padding: 0.6rem 0.8rem;
+            border-radius: 0.8rem;
+            font-size: 0.95rem;
+        }
+
+        .section {
+            padding: 3rem 0;
+        }
+
+        .section-title {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 1.2rem;
+        }
+
+        .filters {
+            display: flex;
+            gap: 0.6rem;
+            flex-wrap: wrap;
+            margin-bottom: 1.2rem;
+        }
+
+        .filter-btn {
+            border: 1px solid var(--border);
+            background: white;
+            padding: 0.6rem 0.9rem;
+            border-radius: 999px;
+            cursor: pointer;
+            font-weight: 600;
+        }
+
+        .filter-btn.active {
+            background: var(--primary);
+            color: white;
+            border-color: var(--primary);
+        }
+
+        .product-grid {
+            display: grid;
+            grid-template-columns: repeat(3, minmax(0, 1fr));
+            gap: 1.2rem;
+        }
+
+        .card {
+            background: var(--card);
+            border: 1px solid var(--border);
+            border-radius: 1rem;
+            padding: 1rem;
+            box-shadow: 0 10px 25px rgba(15, 23, 42, 0.06);
+        }
+
+        .card img {
+            height: 180px;
+            object-fit: cover;
+            border-radius: 0.8rem;
+            margin-bottom: 0.8rem;
+        }
+
+        .price-row {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-top: 0.8rem;
+        }
+
+        .price { color: var(--success); font-weight: 700; }
+
+        .cart-wrap {
+            display: grid;
+            grid-template-columns: 1.2fr 0.8fr;
+            gap: 1.2rem;
+            align-items: start;
+        }
+
+        .cart {
+            background: white;
+            border: 1px solid var(--border);
+            border-radius: 1rem;
+            padding: 1rem;
+        }
+
+        .cart-item {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 0.7rem 0;
+            border-bottom: 1px solid var(--border);
+        }
+
+        .cart-item:last-child { border-bottom: none; }
+
+        .cart-actions {
+            display: flex;
+            align-items: center;
+            gap: 0.7rem;
+        }
+
+        .newsletter {
+            background: linear-gradient(135deg, #eff6ff, #dbeafe);
+            border-radius: 1rem;
+            padding: 1.5rem;
+            display: flex;
+            justify-content: space-between;
+            gap: 1rem;
+            align-items: center;
+            flex-wrap: wrap;
+        }
+
+        .newsletter form {
+            display: flex;
+            gap: 0.7rem;
+            flex-wrap: wrap;
+        }
+
+        .newsletter input {
+            padding: 0.8rem 1rem;
+            border: 1px solid var(--border);
+            border-radius: 999px;
+            min-width: 220px;
+        }
+
+        footer {
+            background: var(--secondary);
+            color: #cbd5e1;
+            padding: 1.4rem 0;
+            text-align: center;
+            margin-top: 2rem;
+        }
+
+        @media (max-width: 900px) {
+            .hero, .cart-wrap { grid-template-columns: 1fr; }
+            .product-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+        }
+
+        @media (max-width: 640px) {
+            nav { display: none; }
+            .product-grid { grid-template-columns: 1fr; }
+            .newsletter input { width: 100%; min-width: 0; }
+        }
+    </style>
+</head>
+<body data-page="home">
+    <header>
+        <div class="container">
+            <div class="topbar">
+                <div class="brand">Petabyte</div>
+                <nav>
+                    <a href="perfil.html">Perfil</a>
+                    <a href="#produtos">Produtos</a>
+                    <a href="#promocoes">Promoções</a>
+                    <a href="#contato">Contato</a>
+                    <a href="auth.html">Entrar</a>
+                    <a class="cart-link" href="cart.html">Carrinho <span id="cartCount" class="cart-count">0</span></a>
+                </nav>
+            </div>
+            <div class="hero">
+                <div>
+                    <div id="welcomeBanner" class="welcome-banner" style="display:none"></div>
+                    <h1>Seu novo portal de compras com tecnologia e estilo.</h1>
+                    <p>Descubra gadgets, acessórios e ofertas exclusivas em um ambiente moderno, rápido e confiável.</p>
+                    <div class="buttons">
+                        <a class="btn btn-primary" href="#produtos">Ver produtos</a>
+                        <a class="btn btn-secondary" href="#promocoes">Ofertas do dia</a>
+                    </div>
+                </div>
+                <div class="hero-card">
+                    <h3>🔥 Destaques da semana</h3>
+                    <p>Frete grátis em pedidos acima de R$ 199 e parcelamento em até 12x sem juros.</p>
+                    <div class="stats">
+                        <span>Entregamos para todo o Brasil</span>
+                        <span>Pagamentos seguros</span>
+                        <span>Atendimento 24/7</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </header>
+
+    <main class="container">
+        <section class="section" id="promocoes">
+            <div class="section-title">
+                <h2>Promoções especiais</h2>
+                <span>Novidades todos os dias</span>
+            </div>
+            <div class="product-grid" id="productGrid">
+                <article class="card" data-category="tecnologia">
+                    <img src="https://images.unsplash.com/photo-1518770660439-4636190af475?auto=format&fit=crop&w=900&q=80" alt="Notebook moderno">
+                    <h3>Notebook Ultra</h3>
+                    <p>Leve, rápido e com bateria de longa duração.</p>
+                    <div class="price-row">
+                        <span class="price">R$ 4.899</span>
+                        <button class="btn btn-primary add-to-cart">Adicionar</button>
+                    </div>
+                </article>
+                <article class="card" data-category="acessorios">
+                    <img src="https://images.unsplash.com/photo-1523275335684-37898b6baf30?auto=format&fit=crop&w=900&q=80" alt="Smartwatch">
+                    <h3>Smartwatch Pro</h3>
+                    <p>Monitore sua rotina com precisão e estilo.</p>
+                    <div class="price-row">
+                        <span class="price">R$ 1.199</span>
+                        <button class="btn btn-primary add-to-cart">Adicionar</button>
+                    </div>
+                </article>
+                <article class="card" data-category="casa">
+                    <img src="https://images.unsplash.com/photo-1518444065439-e933c06ce9cd?auto=format&fit=crop&w=900&q=80" alt="Som portátil">
+                    <h3>Caixa de Som Portátil</h3>
+                    <p>Som potente com conexão Bluetooth de alta qualidade.</p>
+                    <div class="price-row">
+                        <span class="price">R$ 649</span>
+                        <button class="btn btn-primary add-to-cart">Adicionar</button>
+                    </div>
+                </article>
+                <article class="card" data-category="tecnologia">
+                    <img src="https://images.unsplash.com/photo-1517336714731-489689fd1ca8?auto=format&fit=crop&w=900&q=80" alt="Fone de ouvido">
+                    <h3>Fone Premium</h3>
+                    <p>Audio imersivo e cancelamento de ruído.</p>
+                    <div class="price-row">
+                        <span class="price">R$ 799</span>
+                        <button class="btn btn-primary add-to-cart">Adicionar</button>
+                    </div>
+                </article>
+                <article class="card" data-category="acessorios">
+                    <img src="https://images.unsplash.com/photo-1511707171634-5f897ff02aa9?auto=format&fit=crop&w=900&q=80" alt="Celular moderno">
+                    <h3>Smartphone X1</h3>
+                    <p>Câmera tripla e desempenho para o dia a dia.</p>
+                    <div class="price-row">
+                        <span class="price">R$ 2.499</span>
+                        <button class="btn btn-primary add-to-cart">Adicionar</button>
+                    </div>
+                </article>
+                <article class="card" data-category="casa">
+                    <img src="https://images.unsplash.com/photo-1496181133206-80ce9b88a853?auto=format&fit=crop&w=900&q=80" alt="Mesa de trabalho">
+                    <h3>Setup Gamer</h3>
+                    <p>Estação completa com conforto e organização.</p>
+                    <div class="price-row">
+                        <span class="price">R$ 3.199</span>
+                        <button class="btn btn-primary add-to-cart">Adicionar</button>
+                    </div>
+                </article>
+            </div>
+        </section>
+
+        <section class="section" id="produtos">
+            <div class="section-title">
+                <h2>Explore por categoria</h2>
+                <span>Escolha o que combina com você</span>
+            </div>
+            <div class="filters">
+                <button class="filter-btn active" data-filter="todos">Todos</button>
+                <button class="filter-btn" data-filter="tecnologia">Tecnologia</button>
+                <button class="filter-btn" data-filter="acessorios">Acessórios</button>
+                <button class="filter-btn" data-filter="casa">Casa</button>
+            </div>
+
+            <div class="cart-wrap">
+                <div class="card">
+                    <h3>Por que comprar na Petabyte?</h3>
+                    <ul>
+                        <li>Entrega rápida e rastreada</li>
+                        <li>Suporte especializado</li>
+                        <li>Garantia oficial dos produtos</li>
+                        <li>Parcelamento flexível</li>
+                    </ul>
+                </div>
+                <aside class="cart">
+                    <h3>Seu carrinho</h3>
+                    <p>Os produtos adicionados ficam salvos e podem ser revisados em uma página dedicada.</p>
+                    <a class="btn btn-primary" href="cart.html">Abrir carrinho</a>
+                </aside>
+            </div>
+        </section>
+
+        <section class="section" id="contato">
+            <div class="newsletter">
+                <div>
+                    <h3>Receba ofertas exclusivas</h3>
+                    <p>Cadastre seu e-mail e fique por dentro das melhores promoções.</p>
+                </div>
+                <form id="newsletterForm">
+                    <input id="nome" type="text" placeholder="Seu nome" required>
+                    <input id="email" type="email" placeholder="Seu melhor e-mail" required>
+                    <button class="btn btn-primary" type="submit">Inscrever-se</button>
+                </form>
+            </div>
+        </section>
+    </main>
+
+    <footer>
+        <div class="container">
+            <p>Petabyte © 2026 • Portal de E-Commerce moderno e completo.</p>
+        </div>
+    </footer>
+    <script src="script.js"></script>
+</body>
+</html>
