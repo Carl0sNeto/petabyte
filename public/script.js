@@ -5,15 +5,13 @@ function resolverApiBaseUrl() {
         return window.__PETABYTE_API_BASE_URL;
     }
 
+    // Aberto direto do disco (file://) não há origem: assume o padrão local.
     if (window.location.protocol === 'file:') {
         return 'http://localhost:3000';
     }
 
-    const hostname = window.location.hostname;
-    if (hostname === 'localhost' || hostname === '127.0.0.1') {
-        return `${window.location.protocol}//${hostname}:3000`;
-    }
-
+    // Servido por HTTP, a API é sempre a mesma origem da página. Fixar :3000
+    // aqui quebrava qualquer porta alternativa (testes, staging, container).
     return window.location.origin || 'http://localhost:3000';
 }
 
@@ -71,9 +69,57 @@ function formatCurrency(value) {
     return value.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
 }
 
+const QUANTIDADE_MAXIMA_POR_ITEM = 10;
+
+function escapeHtml(valor) {
+    return String(valor === null || valor === undefined ? '' : valor)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
+}
+
+let catalogoCache = null;
+
+async function carregarCatalogo() {
+    if (catalogoCache) {
+        return catalogoCache;
+    }
+
+    const response = await fetch(apiUrl('/produtos'));
+    const data = await lerResposta(response);
+
+    if (!response.ok) {
+        throw new Error(data.mensagem || 'Não foi possível carregar os produtos.');
+    }
+
+    catalogoCache = Array.isArray(data.produtos) ? data.produtos : [];
+    return catalogoCache;
+}
+
+// O carrinho guarda apenas { id, quantidade }. Preço e nome nunca são
+// persistidos no navegador: quem decide isso é o servidor, no checkout.
 function getCart() {
     try {
-        return JSON.parse(localStorage.getItem(STORAGE_KEY)) || [];
+        const bruto = JSON.parse(localStorage.getItem(STORAGE_KEY)) || [];
+
+        if (!Array.isArray(bruto)) {
+            return [];
+        }
+
+        // Carrinhos do formato antigo guardavam { name, price, quantity } e não
+        // têm id. Não há como convertê-los com segurança, então são descartados.
+        const validos = bruto.filter((item) => item && Number.isInteger(Number(item.id)) && Number(item.id) > 0);
+
+        if (validos.length !== bruto.length) {
+            localStorage.setItem(STORAGE_KEY, JSON.stringify(validos));
+        }
+
+        return validos.map((item) => ({
+            id: Number(item.id),
+            quantidade: Math.min(QUANTIDADE_MAXIMA_POR_ITEM, Math.max(1, Number(item.quantidade) || 1))
+        }));
     } catch (error) {
         console.error('Erro ao ler carrinho:', error);
         localStorage.removeItem(STORAGE_KEY);
@@ -90,55 +136,90 @@ function updateCartBadge() {
     if (!badge) return;
 
     const cart = getCart();
-    const totalItems = cart.reduce((sum, item) => sum + item.quantity, 0);
+    const totalItems = cart.reduce((sum, item) => sum + item.quantidade, 0);
     badge.textContent = totalItems;
 }
 
-function addToCart(name, price) {
-    const cart = getCart();
-    const existingItem = cart.find((item) => item.name === name);
+function addToCart(produtoId) {
+    const id = Number(produtoId);
+    if (!Number.isInteger(id) || id <= 0) return;
 
-    if (existingItem) {
-        existingItem.quantity += 1;
+    const cart = getCart();
+    const existente = cart.find((item) => item.id === id);
+
+    if (existente) {
+        if (existente.quantidade >= QUANTIDADE_MAXIMA_POR_ITEM) {
+            alert(`Máximo de ${QUANTIDADE_MAXIMA_POR_ITEM} unidades por produto.`);
+            return;
+        }
+        existente.quantidade += 1;
     } else {
-        cart.push({ name, price, quantity: 1 });
+        cart.push({ id, quantidade: 1 });
     }
 
     saveCart(cart);
     updateCartBadge();
 }
 
-function removeFromCart(name) {
-    const cart = getCart().filter((item) => item.name !== name);
+function removeFromCart(produtoId) {
+    const id = Number(produtoId);
+    const cart = getCart().filter((item) => item.id !== id);
     saveCart(cart);
     updateCartBadge();
     return cart;
 }
 
-function updateQuantity(name, delta) {
+function updateQuantity(produtoId, delta) {
+    const id = Number(produtoId);
     const cart = getCart();
-    const item = cart.find((entry) => entry.name === name);
+    const item = cart.find((entry) => entry.id === id);
 
     if (!item) return cart;
 
-    item.quantity = Math.max(1, item.quantity + delta);
+    item.quantidade = Math.min(QUANTIDADE_MAXIMA_POR_ITEM, Math.max(1, item.quantidade + delta));
     saveCart(cart);
     updateCartBadge();
     return cart;
 }
 
+// Espelha calcularFrete() do servidor. Serve só para exibição: o valor que
+// vale é o recalculado no backend ao criar a preferência de pagamento.
 function getShipping(total) {
     return total > 199 ? 0 : 19.9;
 }
 
-function createCartSummary(cart) {
-    const subtotal = cart.reduce((sum, item) => sum + item.price * item.quantity, 0);
+function createCartSummary(itensDetalhados) {
+    const subtotal = itensDetalhados.reduce((sum, item) => sum + item.produto.preco * item.quantidade, 0);
     const shipping = getShipping(subtotal);
     return {
         subtotal,
         shipping,
         total: subtotal + shipping
     };
+}
+
+// Junta o carrinho (ids) com o catálogo vindo da API, descartando produtos
+// que saíram do ar desde a última visita.
+async function detalharCarrinho() {
+    const cart = getCart();
+
+    if (cart.length === 0) {
+        return [];
+    }
+
+    const produtos = await carregarCatalogo();
+    const produtosPorId = new Map(produtos.map((produto) => [produto.id, produto]));
+
+    const detalhados = cart
+        .map((item) => ({ ...item, produto: produtosPorId.get(item.id) }))
+        .filter((item) => Boolean(item.produto));
+
+    if (detalhados.length !== cart.length) {
+        saveCart(detalhados.map((item) => ({ id: item.id, quantidade: item.quantidade })));
+        updateCartBadge();
+    }
+
+    return detalhados;
 }
 
 async function iniciarPagamento() {
@@ -161,7 +242,10 @@ async function iniciarPagamento() {
                 'Content-Type': 'application/json',
                 Authorization: `Bearer ${token}`
             },
-            body: JSON.stringify({ itens: cart })
+            // Só id e quantidade. O servidor resolve nome e preço no banco.
+            body: JSON.stringify({
+                itens: cart.map((item) => ({ id: item.id, quantidade: item.quantidade }))
+            })
         });
 
         const data = await lerResposta(response);
@@ -240,7 +324,7 @@ async function tratarRetornoPagamento() {
     window.history.replaceState({}, document.title, novaUrl);
 }
 
-function renderCartPage() {
+async function renderCartPage() {
     const cartItems = document.getElementById('cartItems');
     const cartTotal = document.getElementById('cartTotal');
     const shippingValue = document.getElementById('shippingValue');
@@ -248,30 +332,43 @@ function renderCartPage() {
 
     if (!cartItems || !cartTotal || !shippingValue || !finalTotal) return;
 
-    const cart = getCart();
-
-    if (cart.length === 0) {
-        cartItems.innerHTML = '<p>Seu carrinho está vazio.</p>';
+    const zerarResumo = () => {
         cartTotal.textContent = formatCurrency(0);
         shippingValue.textContent = formatCurrency(0);
         finalTotal.textContent = formatCurrency(0);
+    };
+
+    let itens;
+
+    try {
+        itens = await detalharCarrinho();
+    } catch (error) {
+        console.error(error);
+        cartItems.innerHTML = '<p>Não foi possível carregar seu carrinho. Verifique sua conexão e recarregue a página.</p>';
+        zerarResumo();
         return;
     }
 
-    const resumo = createCartSummary(cart);
+    if (itens.length === 0) {
+        cartItems.innerHTML = '<p>Seu carrinho está vazio.</p>';
+        zerarResumo();
+        return;
+    }
 
-    cartItems.innerHTML = cart.map((item) => `
+    const resumo = createCartSummary(itens);
+
+    cartItems.innerHTML = itens.map((item) => `
         <div class="cart-item">
             <div>
-                <strong>${item.name}</strong>
-                <div>${formatCurrency(item.price)} cada</div>
+                <strong>${escapeHtml(item.produto.nome)}</strong>
+                <div>${formatCurrency(item.produto.preco)} cada</div>
             </div>
             <div class="cart-actions">
-                <button class="btn btn-secondary quantity-btn" data-name="${item.name}" data-delta="-1">-</button>
-                <span>${item.quantity}</span>
-                <button class="btn btn-secondary quantity-btn" data-name="${item.name}" data-delta="1">+</button>
-                <span>${formatCurrency(item.price * item.quantity)}</span>
-                <button class="btn btn-secondary remove-item" data-name="${item.name}">Apagar</button>
+                <button class="btn btn-secondary quantity-btn" data-id="${item.id}" data-delta="-1">-</button>
+                <span>${item.quantidade}</span>
+                <button class="btn btn-secondary quantity-btn" data-id="${item.id}" data-delta="1">+</button>
+                <span>${formatCurrency(item.produto.preco * item.quantidade)}</span>
+                <button class="btn btn-secondary remove-item" data-id="${item.id}">Apagar</button>
             </div>
         </div>
     `).join('');
@@ -279,6 +376,39 @@ function renderCartPage() {
     cartTotal.textContent = formatCurrency(resumo.subtotal);
     shippingValue.textContent = formatCurrency(resumo.shipping);
     finalTotal.textContent = formatCurrency(resumo.total);
+}
+
+// Monta a vitrine a partir de GET /produtos. Antes os 6 produtos eram HTML
+// fixo e o preço era lido do texto da página.
+async function renderProductGrid() {
+    const grid = document.getElementById('productGrid');
+    if (!grid) return;
+
+    try {
+        const produtos = await carregarCatalogo();
+
+        if (produtos.length === 0) {
+            grid.innerHTML = '<p>Nenhum produto disponível no momento.</p>';
+            return;
+        }
+
+        grid.innerHTML = produtos.map((produto) => `
+            <article class="card" data-category="${escapeHtml(produto.categoria)}">
+                <img src="${escapeHtml(produto.imagemUrl)}" alt="${escapeHtml(produto.nome)}">
+                <h3>${escapeHtml(produto.nome)}</h3>
+                <p>${escapeHtml(produto.descricao)}</p>
+                <div class="price-row">
+                    <span class="price">${formatCurrency(produto.preco)}</span>
+                    <button class="btn btn-primary add-to-cart" data-id="${produto.id}"${produto.disponivel ? '' : ' disabled'}>
+                        ${produto.disponivel ? 'Adicionar' : 'Indisponível'}
+                    </button>
+                </div>
+            </article>
+        `).join('');
+    } catch (error) {
+        console.error(error);
+        grid.innerHTML = '<p>Não foi possível carregar os produtos. Verifique sua conexão e recarregue a página.</p>';
+    }
 }
 
 function renderWelcomeMessage() {
@@ -353,9 +483,8 @@ document.addEventListener('DOMContentLoaded', () => {
     renderWelcomeMessage();
     renderProfilePage();
 
-    const buttons = document.querySelectorAll('.add-to-cart');
     const filterButtons = document.querySelectorAll('.filter-btn');
-    const cards = document.querySelectorAll('.card[data-category]');
+    const productGrid = document.getElementById('productGrid');
     const newsletterForm = document.getElementById('newsletterForm');
     const loginForm = document.getElementById('loginForm');
     const registerForm = document.getElementById('registerForm');
@@ -363,23 +492,25 @@ document.addEventListener('DOMContentLoaded', () => {
     const tabs = document.querySelectorAll('.tab');
     const toggleRecover = document.getElementById('toggleRecover');
 
-    buttons.forEach((button) => {
-        button.addEventListener('click', () => {
-            const card = button.closest('.card');
-            const name = card.querySelector('h3').textContent;
-            const priceText = card.querySelector('.price').textContent.replace('R$ ', '').replace('.', '').replace(',', '.');
-            const price = Number(priceText);
+    // Delegação: os cards são criados por renderProductGrid() depois deste
+    // handler, então não dá para escutar em cada botão individualmente.
+    if (productGrid) {
+        productGrid.addEventListener('click', (event) => {
+            const button = event.target.closest('.add-to-cart');
+            if (!button || button.disabled) return;
 
-            addToCart(name, price);
+            addToCart(button.dataset.id);
+
+            const rotuloOriginal = button.textContent;
             button.textContent = 'Adicionado';
             button.disabled = true;
 
             setTimeout(() => {
-                button.textContent = 'Adicionar';
+                button.textContent = rotuloOriginal;
                 button.disabled = false;
             }, 800);
         });
-    });
+    }
 
     filterButtons.forEach((button) => {
         button.addEventListener('click', () => {
@@ -387,7 +518,8 @@ document.addEventListener('DOMContentLoaded', () => {
             button.classList.add('active');
 
             const filter = button.dataset.filter;
-            cards.forEach((card) => {
+            // Consultado a cada clique porque a vitrine é montada dinamicamente.
+            document.querySelectorAll('.card[data-category]').forEach((card) => {
                 const category = card.dataset.category;
                 card.style.display = filter === 'todos' || filter === category ? 'block' : 'none';
             });
@@ -538,6 +670,10 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     }
 
+    if (document.body.dataset.page === 'home') {
+        renderProductGrid();
+    }
+
     if (document.body.dataset.page === 'cart') {
         renderCartPage();
         tratarRetornoPagamento();
@@ -546,14 +682,14 @@ document.addEventListener('DOMContentLoaded', () => {
     document.addEventListener('click', (event) => {
         const removeButton = event.target.closest('.remove-item');
         if (removeButton) {
-            removeFromCart(removeButton.dataset.name);
+            removeFromCart(removeButton.dataset.id);
             renderCartPage();
             return;
         }
 
         const quantityButton = event.target.closest('.quantity-btn');
         if (quantityButton) {
-            updateQuantity(quantityButton.dataset.name, Number(quantityButton.dataset.delta));
+            updateQuantity(quantityButton.dataset.id, Number(quantityButton.dataset.delta));
             renderCartPage();
             return;
         }
