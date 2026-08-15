@@ -133,6 +133,27 @@ const limitadorSenha = rateLimit({
     message: { mensagem: 'Muitas solicitações. Tente novamente mais tarde.' }
 });
 
+// O Mercado Pago reenvia notificações em rajada quando não recebe 200.
+// O teto é alto para não descartar retentativas legítimas.
+const limitadorWebhook = rateLimit({
+    windowMs: 15 * 60 * 1000,
+    limit: 300,
+    standardHeaders: 'draft-7',
+    legacyHeaders: false,
+    message: { recebido: false, motivo: 'muitas notificações' }
+});
+
+let avisouWebhookSemSegredo = false;
+
+function avisarWebhookSemSegredo() {
+    if (avisouWebhookSemSegredo) return;
+    avisouWebhookSemSegredo = true;
+    console.warn(
+        '[WEBHOOK] MP_WEBHOOK_SECRET não configurado: as notificações do Mercado Pago ' +
+        'estão sendo aceitas sem verificação de assinatura. Defina o segredo no .env.'
+    );
+}
+
 // Cadastro público (newsletter e criação de conta).
 const limitadorCadastro = rateLimit({
     windowMs: 60 * 60 * 1000,
@@ -303,6 +324,58 @@ async function expirarPedidosPendentes(usuarioId = null) {
     }
 
     return resultado.rowCount;
+}
+
+// Valida o header x-signature do Mercado Pago.
+//
+// O manifest tem o formato "id:<data.id>;request-id:<x-request-id>;ts:<ts>;",
+// omitindo os trechos cujo valor não veio, e é assinado em HMAC-SHA256 com o
+// segredo do painel do Mercado Pago.
+//
+// Sem MP_WEBHOOK_SECRET configurado a verificação é pulada: o handler refaz o
+// payment.get() na API do Mercado Pago e nunca confia no corpo recebido, então
+// forjar uma notificação não cria pagamento. Ainda assim, configure o segredo.
+function validarAssinaturaWebhook(req) {
+    const segredo = process.env.MP_WEBHOOK_SECRET;
+
+    if (!segredo) {
+        return { valido: true, verificado: false };
+    }
+
+    const assinatura = req.get('x-signature');
+
+    if (!assinatura) {
+        return { valido: false, verificado: true, motivo: 'header x-signature ausente' };
+    }
+
+    const partes = assinatura.split(',').reduce((acumulador, trecho) => {
+        const separador = trecho.indexOf('=');
+        if (separador > 0) {
+            acumulador[trecho.slice(0, separador).trim()] = trecho.slice(separador + 1).trim();
+        }
+        return acumulador;
+    }, {});
+
+    if (!partes.ts || !partes.v1) {
+        return { valido: false, verificado: true, motivo: 'header x-signature malformado' };
+    }
+
+    const dataId = req.query['data.id'] || (req.body && req.body.data && req.body.data.id);
+    const requestId = req.get('x-request-id');
+
+    let manifest = '';
+    if (dataId) manifest += `id:${String(dataId).toLowerCase()};`;
+    if (requestId) manifest += `request-id:${requestId};`;
+    manifest += `ts:${partes.ts};`;
+
+    const esperado = Buffer.from(crypto.createHmac('sha256', segredo).update(manifest).digest('hex'), 'hex');
+    const recebido = Buffer.from(partes.v1, 'hex');
+
+    if (esperado.length !== recebido.length || !crypto.timingSafeEqual(esperado, recebido)) {
+        return { valido: false, verificado: true, motivo: 'assinatura não confere' };
+    }
+
+    return { valido: true, verificado: true };
 }
 
 function obterPaymentIdDaRequisicao(req) {
@@ -1125,8 +1198,19 @@ app.post('/pagamentos/confirmar', autenticarToken, async (req, res) => {
     }
 });
 
-app.post('/pagamentos/webhook', async (req, res) => {
+app.post('/pagamentos/webhook', limitadorWebhook, async (req, res) => {
     try {
+        const assinatura = validarAssinaturaWebhook(req);
+
+        if (!assinatura.valido) {
+            console.warn(`[WEBHOOK] Notificação rejeitada: ${assinatura.motivo}`);
+            return res.status(401).json({ recebido: false, motivo: 'assinatura inválida' });
+        }
+
+        if (!assinatura.verificado) {
+            avisarWebhookSemSegredo();
+        }
+
         const paymentId = obterPaymentIdDaRequisicao(req);
 
         if (!paymentId) {
