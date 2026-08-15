@@ -11,11 +11,12 @@ O projeto Petabyte utiliza as seguintes configurações de conexão:
 - **Banco de dados**: `PGDATABASE`
 
 Também são esperadas estas variáveis para o checkout:
-- `JWT_SECRET`
+- `JWT_SECRET` (**obrigatória**, mínimo de 32 caracteres — o servidor não inicia sem ela)
 - `APP_BASE_URL`
 - `CORS_ORIGINS` (lista separada por vírgula)
 - `MP_ACCESS_TOKEN`
 - `MP_PUBLIC_KEY` (opcional)
+- `MP_WEBHOOK_SECRET` (opcional; sem ela o webhook aceita notificações sem verificar a assinatura)
 
 ## Tabelas Necessárias
 
@@ -26,11 +27,29 @@ Armazena dados dos usuários cadastrados.
 |-------|------|-----------|
 | id | SERIAL PRIMARY KEY | Identificador único |
 | nome | VARCHAR(100) NOT NULL | Nome completo do usuário |
-| email | VARCHAR(255) NOT NULL | Email do usuário (único) |
+| email | VARCHAR(255) NOT NULL UNIQUE | Email do usuário |
 | senha | TEXT NOT NULL | Senha criptografada com bcrypt |
 | criado_em | TIMESTAMP | Data/hora do cadastro |
 
-### 2. **historico_compras**
+### 2. **produtos**
+Catálogo e **fonte de verdade dos preços**. O servidor nunca aceita preço vindo
+do cliente: no checkout ele recebe apenas `{ id, quantidade }` e lê nome e preço
+desta tabela.
+
+| Campo | Tipo | Descrição |
+|-------|------|-----------|
+| id | SERIAL PRIMARY KEY | Identificador único |
+| nome | VARCHAR(150) NOT NULL UNIQUE | Nome exibido na vitrine |
+| descricao | TEXT NOT NULL | Descrição curta |
+| preco | NUMERIC(10,2) NOT NULL CHECK (preco > 0) | Preço unitário |
+| categoria | VARCHAR(50) NOT NULL | Usada pelos filtros da home |
+| imagem_url | TEXT NOT NULL | URL da imagem |
+| estoque | INTEGER NOT NULL CHECK (estoque >= 0) | Saldo disponível |
+| ativo | BOOLEAN NOT NULL DEFAULT TRUE | Produtos inativos somem da vitrine e do checkout |
+| criado_em | TIMESTAMP | Data/hora da criação |
+| atualizado_em | TIMESTAMP | Última atualização |
+
+### 3. **historico_compras**
 Armazena o histórico de compras de cada usuário.
 
 | Campo | Tipo | Descrição |
@@ -41,7 +60,7 @@ Armazena o histórico de compras de cada usuário.
 | status | VARCHAR(50) NOT NULL | Status do pedido (ex: "Entregue", "Em transporte") |
 | criado_em | TIMESTAMP | Data/hora da criação do pedido |
 
-### 3. **pedidos**
+### 4. **pedidos**
 Armazena os pedidos criados no checkout e o status sincronizado com o gateway.
 
 | Campo | Tipo | Descrição |
@@ -58,23 +77,27 @@ Armazena os pedidos criados no checkout e o status sincronizado com o gateway.
 | frete | NUMERIC(10,2) NOT NULL | Valor do frete |
 | total | NUMERIC(10,2) NOT NULL | Total do pedido |
 | moeda | VARCHAR(10) NOT NULL | Moeda usada no checkout |
+| estoque_baixado | BOOLEAN NOT NULL DEFAULT FALSE | Impede que a confirmação manual e o webhook debitem o estoque duas vezes |
 | criado_em | TIMESTAMP | Data/hora da criação |
 | atualizado_em | TIMESTAMP | Última atualização |
 
-### 4. **pedido_itens**
-Armazena os itens individuais de cada pedido.
+### 5. **pedido_itens**
+Armazena os itens individuais de cada pedido. `nome` e `preco_unitario` ficam
+congelados na linha: o histórico não muda se o produto for renomeado,
+reprecificado ou removido depois.
 
 | Campo | Tipo | Descrição |
 |-------|------|-----------|
 | id | SERIAL PRIMARY KEY | Identificador único |
 | pedido_id | INTEGER NOT NULL | FK para pedidos.id |
-| nome | VARCHAR(150) NOT NULL | Nome do item |
-| preco_unitario | NUMERIC(10,2) NOT NULL | Preço unitário |
+| produto_id | INTEGER | FK para produtos.id (ON DELETE SET NULL) |
+| nome | VARCHAR(150) NOT NULL | Nome do item no momento da compra |
+| preco_unitario | NUMERIC(10,2) NOT NULL | Preço unitário no momento da compra |
 | quantidade | INTEGER NOT NULL | Quantidade comprada |
 | total | NUMERIC(10,2) NOT NULL | Total do item |
 | criado_em | TIMESTAMP | Data/hora da criação |
 
-### 5. **password_resets**
+### 6. **password_resets**
 Armazena tokens para recuperação de senha.
 
 | Campo | Tipo | Descrição |
@@ -112,11 +135,28 @@ O `server.js` já cria as tabelas automaticamente quando inicia:
 npm start
 ```
 
+## Migrations
+
+Bancos que já existiam antes do catálogo precisam rodar as migrations, que são
+idempotentes e podem ser executadas mais de uma vez:
+
+```bash
+npm run migrate
+```
+
+| Arquivo | O que faz |
+|---------|-----------|
+| `migrations/001_catalogo_e_integridade.sql` | Cria `produtos` com os 6 itens iniciais, adiciona `pedido_itens.produto_id` e a constraint UNIQUE em `usuarios.email` |
+| `migrations/002_controle_de_estoque.sql` | Adiciona `pedidos.estoque_baixado` |
+
+A migration 001 aborta com erro se houver e-mails duplicados em `usuarios`.
+Nesse caso, consolide os registros antes de aplicá-la.
+
 ## Variáveis de Ambiente
 
 Use `.env.example` como base e configure pelo menos:
 - `PORT`, `PGHOST`, `PGPORT`, `PGDATABASE`, `PGUSER`, `PGPASSWORD`
-- `JWT_SECRET`
+- `JWT_SECRET` (obrigatória, mínimo de 32 caracteres)
 - `APP_BASE_URL`
 - `CORS_ORIGINS`
 - `MP_ACCESS_TOKEN`
@@ -124,8 +164,10 @@ Use `.env.example` como base e configure pelo menos:
 ## Notas Importantes
 
 - As tabelas são criadas com `IF NOT EXISTS`, então é seguro executar o script múltiplas vezes
-- Ao deletar um usuário, seus registros em `historico_compras` e `password_resets` são deletados automaticamente (ON DELETE CASCADE)
+- Ao deletar um usuário, seus registros em `historico_compras`, `pedidos` e `password_resets` são deletados automaticamente (ON DELETE CASCADE)
+- Ao deletar um produto, os itens de pedido apenas perdem a referência (`produto_id` vira NULL) e mantêm nome e preço históricos
 - Indices foram adicionados para melhor performance nas queries de busca
+- O estoque é debitado apenas quando o pagamento é aprovado, e devolvido em caso de `refunded`, `cancelled` ou `charged_back`
 
 ## Verificação
 

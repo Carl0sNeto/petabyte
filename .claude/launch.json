@@ -1,0 +1,21 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "attach",
+      "url": "http://localhost:3000",
+      "port": 3000,
+      "autoPort": false
+    },
+    {
+      "name": "start",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": [
+        "run",
+        "start"
+      ],
+      "port": 3000,
+      "autoPort": false
+    }
+  ]
+}

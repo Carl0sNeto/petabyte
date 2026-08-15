@@ -85,7 +85,9 @@ app.use((req, res, next) => {
 });
 // Serve apenas o front-end. Manter __dirname aqui exporia server.js,
 // package.json, o schema SQL e todo o node_modules por HTTP.
-app.use(express.static(path.join(__dirname, 'public')));
+// index aponta para a home porque o projeto não tem index.html: sem isso a
+// raiz "/" respondia 404.
+app.use(express.static(path.join(__dirname, 'public'), { index: 'E-Commerce.html' }));
 
 app.use((erro, req, res, next) => {
     if (erro instanceof SyntaxError && erro.status === 400 && 'body' in erro) {
@@ -132,6 +134,27 @@ const limitadorSenha = rateLimit({
     legacyHeaders: false,
     message: { mensagem: 'Muitas solicitações. Tente novamente mais tarde.' }
 });
+
+// O Mercado Pago reenvia notificações em rajada quando não recebe 200.
+// O teto é alto para não descartar retentativas legítimas.
+const limitadorWebhook = rateLimit({
+    windowMs: 15 * 60 * 1000,
+    limit: 300,
+    standardHeaders: 'draft-7',
+    legacyHeaders: false,
+    message: { recebido: false, motivo: 'muitas notificações' }
+});
+
+let avisouWebhookSemSegredo = false;
+
+function avisarWebhookSemSegredo() {
+    if (avisouWebhookSemSegredo) return;
+    avisouWebhookSemSegredo = true;
+    console.warn(
+        '[WEBHOOK] MP_WEBHOOK_SECRET não configurado: as notificações do Mercado Pago ' +
+        'estão sendo aceitas sem verificação de assinatura. Defina o segredo no .env.'
+    );
+}
 
 // Cadastro público (newsletter e criação de conta).
 const limitadorCadastro = rateLimit({
@@ -187,22 +210,84 @@ function extrairHistoricoId(externalReference) {
     return Number(correspondencia[1]);
 }
 
-function validarItensCarrinho(itens) {
+const LIMITE_ITENS_CARRINHO = 20;
+const LIMITE_QUANTIDADE_ITEM = 10;
+
+function validarFormatoCarrinho(itens) {
     if (!Array.isArray(itens) || itens.length === 0) {
         return { valido: false, mensagem: 'O carrinho está vazio.' };
     }
 
-    for (const item of itens) {
-        const nomeValido = typeof item.name === 'string' && item.name.trim().length > 0;
-        const precoValido = Number.isFinite(Number(item.price)) && Number(item.price) > 0;
-        const quantidadeValida = Number.isInteger(Number(item.quantity)) && Number(item.quantity) > 0;
+    if (itens.length > LIMITE_ITENS_CARRINHO) {
+        return { valido: false, mensagem: `O carrinho aceita no máximo ${LIMITE_ITENS_CARRINHO} produtos distintos.` };
+    }
 
-        if (!nomeValido || !precoValido || !quantidadeValida) {
-            return { valido: false, mensagem: 'Há itens inválidos no carrinho.' };
+    const idsVistos = new Set();
+
+    for (const item of itens) {
+        const id = Number(item && item.id);
+        const quantidade = Number(item && item.quantidade);
+
+        if (!Number.isInteger(id) || id <= 0) {
+            return { valido: false, mensagem: 'Há itens com identificador inválido no carrinho.' };
+        }
+
+        if (idsVistos.has(id)) {
+            return { valido: false, mensagem: 'O mesmo produto aparece mais de uma vez no carrinho.' };
+        }
+
+        idsVistos.add(id);
+
+        if (!Number.isInteger(quantidade) || quantidade <= 0 || quantidade > LIMITE_QUANTIDADE_ITEM) {
+            return { valido: false, mensagem: `Quantidade inválida. Máximo de ${LIMITE_QUANTIDADE_ITEM} unidades por produto.` };
         }
     }
 
     return { valido: true };
+}
+
+// Monta os itens do checkout lendo nome e preço SEMPRE do banco.
+// O cliente envia apenas { id, quantidade }; qualquer preço que ele mande é
+// ignorado. Sem isto, era possível pagar R$ 0,01 em qualquer produto.
+async function resolverItensCarrinho(itens, executor = pool) {
+    const formato = validarFormatoCarrinho(itens);
+
+    if (!formato.valido) {
+        return { ok: false, mensagem: formato.mensagem };
+    }
+
+    const ids = itens.map((item) => Number(item.id));
+    const resultado = await executor.query(
+        'SELECT id, nome, preco, estoque FROM produtos WHERE id = ANY($1::int[]) AND ativo = TRUE',
+        [ids]
+    );
+
+    const produtosPorId = new Map(resultado.rows.map((linha) => [linha.id, linha]));
+    const resolvidos = [];
+
+    for (const item of itens) {
+        const id = Number(item.id);
+        const quantidade = Number(item.quantidade);
+        const produto = produtosPorId.get(id);
+
+        if (!produto) {
+            return { ok: false, mensagem: 'Há produtos indisponíveis no carrinho. Atualize a página e tente novamente.' };
+        }
+
+        if (produto.estoque < quantidade) {
+            return { ok: false, mensagem: `Estoque insuficiente para "${produto.nome}". Disponível: ${produto.estoque}.` };
+        }
+
+        resolvidos.push({
+            produtoId: produto.id,
+            title: produto.nome,
+            quantity: quantidade,
+            currency_id: 'BRL',
+            unit_price: Number(Number(produto.preco).toFixed(2))
+        });
+    }
+
+    return { ok: true, itens: resolvidos };
 }
 
 function calcularFrete(subtotal) {
@@ -241,6 +326,58 @@ async function expirarPedidosPendentes(usuarioId = null) {
     }
 
     return resultado.rowCount;
+}
+
+// Valida o header x-signature do Mercado Pago.
+//
+// O manifest tem o formato "id:<data.id>;request-id:<x-request-id>;ts:<ts>;",
+// omitindo os trechos cujo valor não veio, e é assinado em HMAC-SHA256 com o
+// segredo do painel do Mercado Pago.
+//
+// Sem MP_WEBHOOK_SECRET configurado a verificação é pulada: o handler refaz o
+// payment.get() na API do Mercado Pago e nunca confia no corpo recebido, então
+// forjar uma notificação não cria pagamento. Ainda assim, configure o segredo.
+function validarAssinaturaWebhook(req) {
+    const segredo = process.env.MP_WEBHOOK_SECRET;
+
+    if (!segredo) {
+        return { valido: true, verificado: false };
+    }
+
+    const assinatura = req.get('x-signature');
+
+    if (!assinatura) {
+        return { valido: false, verificado: true, motivo: 'header x-signature ausente' };
+    }
+
+    const partes = assinatura.split(',').reduce((acumulador, trecho) => {
+        const separador = trecho.indexOf('=');
+        if (separador > 0) {
+            acumulador[trecho.slice(0, separador).trim()] = trecho.slice(separador + 1).trim();
+        }
+        return acumulador;
+    }, {});
+
+    if (!partes.ts || !partes.v1) {
+        return { valido: false, verificado: true, motivo: 'header x-signature malformado' };
+    }
+
+    const dataId = req.query['data.id'] || (req.body && req.body.data && req.body.data.id);
+    const requestId = req.get('x-request-id');
+
+    let manifest = '';
+    if (dataId) manifest += `id:${String(dataId).toLowerCase()};`;
+    if (requestId) manifest += `request-id:${requestId};`;
+    manifest += `ts:${partes.ts};`;
+
+    const esperado = Buffer.from(crypto.createHmac('sha256', segredo).update(manifest).digest('hex'), 'hex');
+    const recebido = Buffer.from(partes.v1, 'hex');
+
+    if (esperado.length !== recebido.length || !crypto.timingSafeEqual(esperado, recebido)) {
+        return { valido: false, verificado: true, motivo: 'assinatura não confere' };
+    }
+
+    return { valido: true, verificado: true };
 }
 
 function obterPaymentIdDaRequisicao(req) {
@@ -307,8 +444,8 @@ async function registrarPedidoPendente(usuario, itens, subtotal, frete, total) {
         for (const item of itens) {
             const itemTotal = Number((item.unit_price * item.quantity).toFixed(2));
             await client.query(
-                `INSERT INTO pedido_itens (pedido_id, nome, preco_unitario, quantidade, total) VALUES ($1, $2, $3, $4, $5)`,
-                [pedidoId, item.title, item.unit_price, item.quantity, itemTotal]
+                `INSERT INTO pedido_itens (pedido_id, produto_id, nome, preco_unitario, quantidade, total) VALUES ($1, $2, $3, $4, $5, $6)`,
+                [pedidoId, item.produtoId || null, item.title, item.unit_price, item.quantity, itemTotal]
             );
         }
 
@@ -331,44 +468,114 @@ async function sincronizarPagamentoNoBanco(pagamento) {
         throw new Error('Pagamento sem referência de pedido válida.');
     }
 
-    const pedidoResult = await pool.query(
-        'SELECT id, usuario_id, expira_em FROM pedidos WHERE historico_id = $1 LIMIT 1',
-        [historicoId]
-    );
+    const STATUS_QUE_DEVOLVEM_ESTOQUE = ['refunded', 'cancelled', 'charged_back'];
 
-    if (pedidoResult.rowCount === 0) {
-        throw new Error('Pedido não encontrado para este pagamento.');
+    const client = await pool.connect();
+    let pedidoExpirado = false;
+    let resultado = null;
+
+    try {
+        await client.query('BEGIN');
+
+        // FOR UPDATE serializa /pagamentos/confirmar e o webhook, que podem
+        // processar o mesmo pagamento simultaneamente.
+        const pedidoResult = await client.query(
+            'SELECT id, usuario_id, expira_em, estoque_baixado FROM pedidos WHERE historico_id = $1 LIMIT 1 FOR UPDATE',
+            [historicoId]
+        );
+
+        if (pedidoResult.rowCount === 0) {
+            throw new Error('Pedido não encontrado para este pagamento.');
+        }
+
+        const pedido = pedidoResult.rows[0];
+
+        if (pedido.expira_em && new Date(pedido.expira_em) < new Date()) {
+            await client.query(
+                `UPDATE pedidos
+                 SET status = 'Expirado',
+                     payment_status = 'expired',
+                     atualizado_em = CURRENT_TIMESTAMP
+                 WHERE id = $1`,
+                [pedido.id]
+            );
+            await client.query('UPDATE historico_compras SET status = $1 WHERE id = $2', ['Expirado', historicoId]);
+            await client.query('COMMIT');
+            pedidoExpirado = true;
+        } else {
+            const statusPedido = mapearStatusPagamento(pagamento.status);
+            const aprovado = pagamento.status === 'approved';
+            const devolveEstoque = STATUS_QUE_DEVOLVEM_ESTOQUE.includes(pagamento.status);
+
+            const itensDoPedido = await client.query(
+                'SELECT produto_id, quantidade FROM pedido_itens WHERE pedido_id = $1 AND produto_id IS NOT NULL',
+                [pedido.id]
+            );
+
+            // Debita uma única vez, na primeira aprovação. A flag no pedido é o
+            // que impede o webhook de debitar de novo a cada reenvio.
+            if (aprovado && !pedido.estoque_baixado) {
+                for (const item of itensDoPedido.rows) {
+                    const baixa = await client.query(
+                        `UPDATE produtos
+                         SET estoque = estoque - $1, atualizado_em = CURRENT_TIMESTAMP
+                         WHERE id = $2 AND estoque >= $1`,
+                        [item.quantidade, item.produto_id]
+                    );
+
+                    if (baixa.rowCount === 0) {
+                        console.warn(
+                            `[ESTOQUE] Pedido ${pedido.id}: estoque insuficiente para o produto ${item.produto_id} ` +
+                            `(${item.quantidade} un.). O pagamento já foi aprovado; revisar manualmente.`
+                        );
+                    }
+                }
+
+                await client.query('UPDATE pedidos SET estoque_baixado = TRUE WHERE id = $1', [pedido.id]);
+            }
+
+            // Estorno ou cancelamento depois da baixa: devolve ao catálogo.
+            if (devolveEstoque && pedido.estoque_baixado) {
+                for (const item of itensDoPedido.rows) {
+                    await client.query(
+                        `UPDATE produtos
+                         SET estoque = estoque + $1, atualizado_em = CURRENT_TIMESTAMP
+                         WHERE id = $2`,
+                        [item.quantidade, item.produto_id]
+                    );
+                }
+
+                await client.query('UPDATE pedidos SET estoque_baixado = FALSE WHERE id = $1', [pedido.id]);
+                console.log(`[ESTOQUE] Pedido ${pedido.id}: estoque devolvido após status "${pagamento.status}".`);
+            }
+
+            await client.query(
+                `UPDATE pedidos
+                 SET payment_id = $1,
+                     payment_status = $2,
+                     status = $3,
+                     atualizado_em = CURRENT_TIMESTAMP
+                 WHERE id = $4`,
+                [String(pagamento.id), pagamento.status, statusPedido, pedido.id]
+            );
+
+            await client.query('UPDATE historico_compras SET status = $1 WHERE id = $2', [statusPedido, historicoId]);
+            await client.query('COMMIT');
+
+            resultado = { historicoId, pedidoId: pedido.id, status: pagamento.status, statusPedido };
+        }
+    } catch (erro) {
+        await client.query('ROLLBACK').catch(() => {});
+        throw erro;
+    } finally {
+        client.release();
     }
 
-    const pedido = pedidoResult.rows[0];
-    if (pedido.expira_em && new Date(pedido.expira_em) < new Date()) {
-        await pool.query(
-            `UPDATE pedidos
-             SET status = 'Expirado',
-                 payment_status = 'expired',
-                 atualizado_em = CURRENT_TIMESTAMP
-             WHERE id = $1`,
-            [pedido.id]
-        );
-        await pool.query('UPDATE historico_compras SET status = $1 WHERE id = $2', ['Expirado', historicoId]);
+    if (pedidoExpirado) {
         throw new Error('Este pedido expirou após 1 minuto e não pode mais ser confirmado.');
     }
 
-    const statusPedido = mapearStatusPagamento(pagamento.status);
-
-    await pool.query(
-        `UPDATE pedidos
-         SET payment_id = $1,
-             payment_status = $2,
-             status = $3,
-             atualizado_em = CURRENT_TIMESTAMP
-         WHERE id = $4`,
-        [String(pagamento.id), pagamento.status, statusPedido, pedido.id]
-    );
-
-    await pool.query('UPDATE historico_compras SET status = $1 WHERE id = $2', [statusPedido, historicoId]);
-
-    return { historicoId, pedidoId: pedido.id, status: pagamento.status, statusPedido };
+    return resultado;
 }
 
 function autenticarToken(req, res, next) {
@@ -401,32 +608,6 @@ async function popularHistoricoPadrao() {
             );
         }
     }
-}
-
-function criarTransportadorEmail() {
-    const host = process.env.SMTP_HOST;
-    const port = Number(process.env.SMTP_PORT || 587);
-    const user = process.env.SMTP_USER;
-    const pass = process.env.SMTP_PASS;
-    const timeout = Number(process.env.SMTP_TIMEOUT_MS || 10000);
-
-    if (!host || !user || !pass) {
-        return null;
-    }
-
-    return nodemailer.createTransport({
-        host,
-        port,
-        secure: port === 465,
-        connectionTimeout: timeout,
-        greetingTimeout: timeout,
-        socketTimeout: timeout,
-        requireTLS: port !== 465,
-        tls: {
-            minVersion: 'TLSv1.2'
-        },
-        auth: { user, pass }
-    });
 }
 
 function criarTransportadoresFallbackEmail() {
@@ -625,10 +806,25 @@ async function iniciarServidor() {
     });
 }
 
-iniciarServidor().catch((erro) => {
-    console.error('Falha ao iniciar servidor:', erro);
-    process.exit(1);
-});
+// Só sobe o servidor quando executado direto (npm start). Ao ser importado
+// por um teste, apenas expõe as funções abaixo sem abrir porta nem tocar no banco.
+if (require.main === module) {
+    iniciarServidor().catch((erro) => {
+        console.error('Falha ao iniciar servidor:', erro);
+        process.exit(1);
+    });
+}
+
+module.exports = {
+    app,
+    pool,
+    calcularFrete,
+    validarFormatoCarrinho,
+    resolverItensCarrinho,
+    mapearStatusPagamento,
+    registrarPedidoPendente,
+    sincronizarPagamentoNoBanco
+};
 
 app.get('/health', (req, res) => {
     res.json({ status: 'ok' });
@@ -820,28 +1016,54 @@ app.post('/auth/redefinir-senha', limitadorSenha, async (req, res) => {
     }
 });
 
+app.get('/produtos', async (req, res) => {
+    if (!bancoDisponivel) {
+        return res.status(503).json({ mensagem: 'Banco de dados indisponível no momento.' });
+    }
+
+    try {
+        const resultado = await pool.query(
+            `SELECT id, nome, descricao, preco, categoria, imagem_url, estoque
+             FROM produtos
+             WHERE ativo = TRUE
+             ORDER BY id`
+        );
+
+        return res.json({
+            produtos: resultado.rows.map((linha) => ({
+                id: linha.id,
+                nome: linha.nome,
+                descricao: linha.descricao,
+                preco: Number(linha.preco),
+                categoria: linha.categoria,
+                imagemUrl: linha.imagem_url,
+                disponivel: linha.estoque > 0
+            }))
+        });
+    } catch (erro) {
+        console.error('Erro ao listar produtos:', erro);
+        return res.status(500).json({ mensagem: 'Não foi possível carregar os produtos.' });
+    }
+});
+
 app.post('/pagamentos/criar', autenticarToken, async (req, res) => {
     if (!bancoDisponivel) {
         return res.status(503).json({ mensagem: 'Banco de dados indisponível no momento.' });
     }
 
     const { itens } = req.body;
-    const validacao = validarItensCarrinho(itens);
-
-    if (!validacao.valido) {
-        return res.status(400).json({ mensagem: validacao.mensagem });
-    }
 
     try {
+        const resolucao = await resolverItensCarrinho(itens);
+
+        if (!resolucao.ok) {
+            return res.status(400).json({ mensagem: resolucao.mensagem });
+        }
+
+        const itensNormalizados = resolucao.itens;
+
         const clienteMP = getMercadoPagoClient();
         const preferenceClient = new Preference(clienteMP);
-
-        const itensNormalizados = itens.map((item) => ({
-            title: item.name.trim(),
-            quantity: Number(item.quantity),
-            currency_id: 'BRL',
-            unit_price: Number(Number(item.price).toFixed(2))
-        }));
 
         const subtotal = itensNormalizados.reduce((acumulador, item) => acumulador + (item.unit_price * item.quantity), 0);
         const frete = calcularFrete(subtotal);
@@ -850,8 +1072,11 @@ app.post('/pagamentos/criar', autenticarToken, async (req, res) => {
         const pedido = await registrarPedidoPendente(req.usuario, itensNormalizados, subtotal, frete, total);
         const baseUrl = getBaseUrl(req);
 
+        // produtoId é de uso interno; a API do Mercado Pago não o conhece.
+        const itensMercadoPago = itensNormalizados.map(({ produtoId, ...item }) => item);
+
         if (frete > 0) {
-            itensNormalizados.push({
+            itensMercadoPago.push({
                 title: 'Frete',
                 quantity: 1,
                 currency_id: 'BRL',
@@ -861,7 +1086,7 @@ app.post('/pagamentos/criar', autenticarToken, async (req, res) => {
 
         const preference = await preferenceClient.create({
             body: {
-                items: itensNormalizados,
+                items: itensMercadoPago,
                 external_reference: pedido.externalReference,
                 metadata: {
                     historico_id: pedido.historicoId,
@@ -949,8 +1174,19 @@ app.post('/pagamentos/confirmar', autenticarToken, async (req, res) => {
     }
 });
 
-app.post('/pagamentos/webhook', async (req, res) => {
+app.post('/pagamentos/webhook', limitadorWebhook, async (req, res) => {
     try {
+        const assinatura = validarAssinaturaWebhook(req);
+
+        if (!assinatura.valido) {
+            console.warn(`[WEBHOOK] Notificação rejeitada: ${assinatura.motivo}`);
+            return res.status(401).json({ recebido: false, motivo: 'assinatura inválida' });
+        }
+
+        if (!assinatura.verificado) {
+            avisarWebhookSemSegredo();
+        }
+
         const paymentId = obterPaymentIdDaRequisicao(req);
 
         if (!paymentId) {
