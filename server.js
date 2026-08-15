@@ -85,7 +85,9 @@ app.use((req, res, next) => {
 });
 // Serve apenas o front-end. Manter __dirname aqui exporia server.js,
 // package.json, o schema SQL e todo o node_modules por HTTP.
-app.use(express.static(path.join(__dirname, 'public')));
+// index aponta para a home porque o projeto não tem index.html: sem isso a
+// raiz "/" respondia 404.
+app.use(express.static(path.join(__dirname, 'public'), { index: 'E-Commerce.html' }));
 
 app.use((erro, req, res, next) => {
     if (erro instanceof SyntaxError && erro.status === 400 && 'body' in erro) {
@@ -606,32 +608,6 @@ async function popularHistoricoPadrao() {
             );
         }
     }
-}
-
-function criarTransportadorEmail() {
-    const host = process.env.SMTP_HOST;
-    const port = Number(process.env.SMTP_PORT || 587);
-    const user = process.env.SMTP_USER;
-    const pass = process.env.SMTP_PASS;
-    const timeout = Number(process.env.SMTP_TIMEOUT_MS || 10000);
-
-    if (!host || !user || !pass) {
-        return null;
-    }
-
-    return nodemailer.createTransport({
-        host,
-        port,
-        secure: port === 465,
-        connectionTimeout: timeout,
-        greetingTimeout: timeout,
-        socketTimeout: timeout,
-        requireTLS: port !== 465,
-        tls: {
-            minVersion: 'TLSv1.2'
-        },
-        auth: { user, pass }
-    });
 }
 
 function criarTransportadoresFallbackEmail() {
