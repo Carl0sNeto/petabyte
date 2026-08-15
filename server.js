@@ -187,22 +187,84 @@ function extrairHistoricoId(externalReference) {
     return Number(correspondencia[1]);
 }
 
-function validarItensCarrinho(itens) {
+const LIMITE_ITENS_CARRINHO = 20;
+const LIMITE_QUANTIDADE_ITEM = 10;
+
+function validarFormatoCarrinho(itens) {
     if (!Array.isArray(itens) || itens.length === 0) {
         return { valido: false, mensagem: 'O carrinho está vazio.' };
     }
 
-    for (const item of itens) {
-        const nomeValido = typeof item.name === 'string' && item.name.trim().length > 0;
-        const precoValido = Number.isFinite(Number(item.price)) && Number(item.price) > 0;
-        const quantidadeValida = Number.isInteger(Number(item.quantity)) && Number(item.quantity) > 0;
+    if (itens.length > LIMITE_ITENS_CARRINHO) {
+        return { valido: false, mensagem: `O carrinho aceita no máximo ${LIMITE_ITENS_CARRINHO} produtos distintos.` };
+    }
 
-        if (!nomeValido || !precoValido || !quantidadeValida) {
-            return { valido: false, mensagem: 'Há itens inválidos no carrinho.' };
+    const idsVistos = new Set();
+
+    for (const item of itens) {
+        const id = Number(item && item.id);
+        const quantidade = Number(item && item.quantidade);
+
+        if (!Number.isInteger(id) || id <= 0) {
+            return { valido: false, mensagem: 'Há itens com identificador inválido no carrinho.' };
+        }
+
+        if (idsVistos.has(id)) {
+            return { valido: false, mensagem: 'O mesmo produto aparece mais de uma vez no carrinho.' };
+        }
+
+        idsVistos.add(id);
+
+        if (!Number.isInteger(quantidade) || quantidade <= 0 || quantidade > LIMITE_QUANTIDADE_ITEM) {
+            return { valido: false, mensagem: `Quantidade inválida. Máximo de ${LIMITE_QUANTIDADE_ITEM} unidades por produto.` };
         }
     }
 
     return { valido: true };
+}
+
+// Monta os itens do checkout lendo nome e preço SEMPRE do banco.
+// O cliente envia apenas { id, quantidade }; qualquer preço que ele mande é
+// ignorado. Sem isto, era possível pagar R$ 0,01 em qualquer produto.
+async function resolverItensCarrinho(itens, executor = pool) {
+    const formato = validarFormatoCarrinho(itens);
+
+    if (!formato.valido) {
+        return { ok: false, mensagem: formato.mensagem };
+    }
+
+    const ids = itens.map((item) => Number(item.id));
+    const resultado = await executor.query(
+        'SELECT id, nome, preco, estoque FROM produtos WHERE id = ANY($1::int[]) AND ativo = TRUE',
+        [ids]
+    );
+
+    const produtosPorId = new Map(resultado.rows.map((linha) => [linha.id, linha]));
+    const resolvidos = [];
+
+    for (const item of itens) {
+        const id = Number(item.id);
+        const quantidade = Number(item.quantidade);
+        const produto = produtosPorId.get(id);
+
+        if (!produto) {
+            return { ok: false, mensagem: 'Há produtos indisponíveis no carrinho. Atualize a página e tente novamente.' };
+        }
+
+        if (produto.estoque < quantidade) {
+            return { ok: false, mensagem: `Estoque insuficiente para "${produto.nome}". Disponível: ${produto.estoque}.` };
+        }
+
+        resolvidos.push({
+            produtoId: produto.id,
+            title: produto.nome,
+            quantity: quantidade,
+            currency_id: 'BRL',
+            unit_price: Number(Number(produto.preco).toFixed(2))
+        });
+    }
+
+    return { ok: true, itens: resolvidos };
 }
 
 function calcularFrete(subtotal) {
@@ -307,8 +369,8 @@ async function registrarPedidoPendente(usuario, itens, subtotal, frete, total) {
         for (const item of itens) {
             const itemTotal = Number((item.unit_price * item.quantity).toFixed(2));
             await client.query(
-                `INSERT INTO pedido_itens (pedido_id, nome, preco_unitario, quantidade, total) VALUES ($1, $2, $3, $4, $5)`,
-                [pedidoId, item.title, item.unit_price, item.quantity, itemTotal]
+                `INSERT INTO pedido_itens (pedido_id, produto_id, nome, preco_unitario, quantidade, total) VALUES ($1, $2, $3, $4, $5, $6)`,
+                [pedidoId, item.produtoId || null, item.title, item.unit_price, item.quantity, itemTotal]
             );
         }
 
@@ -625,10 +687,23 @@ async function iniciarServidor() {
     });
 }
 
-iniciarServidor().catch((erro) => {
-    console.error('Falha ao iniciar servidor:', erro);
-    process.exit(1);
-});
+// Só sobe o servidor quando executado direto (npm start). Ao ser importado
+// por um teste, apenas expõe as funções abaixo sem abrir porta nem tocar no banco.
+if (require.main === module) {
+    iniciarServidor().catch((erro) => {
+        console.error('Falha ao iniciar servidor:', erro);
+        process.exit(1);
+    });
+}
+
+module.exports = {
+    app,
+    pool,
+    calcularFrete,
+    validarFormatoCarrinho,
+    resolverItensCarrinho,
+    mapearStatusPagamento
+};
 
 app.get('/health', (req, res) => {
     res.json({ status: 'ok' });
@@ -820,28 +895,54 @@ app.post('/auth/redefinir-senha', limitadorSenha, async (req, res) => {
     }
 });
 
+app.get('/produtos', async (req, res) => {
+    if (!bancoDisponivel) {
+        return res.status(503).json({ mensagem: 'Banco de dados indisponível no momento.' });
+    }
+
+    try {
+        const resultado = await pool.query(
+            `SELECT id, nome, descricao, preco, categoria, imagem_url, estoque
+             FROM produtos
+             WHERE ativo = TRUE
+             ORDER BY id`
+        );
+
+        return res.json({
+            produtos: resultado.rows.map((linha) => ({
+                id: linha.id,
+                nome: linha.nome,
+                descricao: linha.descricao,
+                preco: Number(linha.preco),
+                categoria: linha.categoria,
+                imagemUrl: linha.imagem_url,
+                disponivel: linha.estoque > 0
+            }))
+        });
+    } catch (erro) {
+        console.error('Erro ao listar produtos:', erro);
+        return res.status(500).json({ mensagem: 'Não foi possível carregar os produtos.' });
+    }
+});
+
 app.post('/pagamentos/criar', autenticarToken, async (req, res) => {
     if (!bancoDisponivel) {
         return res.status(503).json({ mensagem: 'Banco de dados indisponível no momento.' });
     }
 
     const { itens } = req.body;
-    const validacao = validarItensCarrinho(itens);
-
-    if (!validacao.valido) {
-        return res.status(400).json({ mensagem: validacao.mensagem });
-    }
 
     try {
+        const resolucao = await resolverItensCarrinho(itens);
+
+        if (!resolucao.ok) {
+            return res.status(400).json({ mensagem: resolucao.mensagem });
+        }
+
+        const itensNormalizados = resolucao.itens;
+
         const clienteMP = getMercadoPagoClient();
         const preferenceClient = new Preference(clienteMP);
-
-        const itensNormalizados = itens.map((item) => ({
-            title: item.name.trim(),
-            quantity: Number(item.quantity),
-            currency_id: 'BRL',
-            unit_price: Number(Number(item.price).toFixed(2))
-        }));
 
         const subtotal = itensNormalizados.reduce((acumulador, item) => acumulador + (item.unit_price * item.quantity), 0);
         const frete = calcularFrete(subtotal);
@@ -850,8 +951,11 @@ app.post('/pagamentos/criar', autenticarToken, async (req, res) => {
         const pedido = await registrarPedidoPendente(req.usuario, itensNormalizados, subtotal, frete, total);
         const baseUrl = getBaseUrl(req);
 
+        // produtoId é de uso interno; a API do Mercado Pago não o conhece.
+        const itensMercadoPago = itensNormalizados.map(({ produtoId, ...item }) => item);
+
         if (frete > 0) {
-            itensNormalizados.push({
+            itensMercadoPago.push({
                 title: 'Frete',
                 quantity: 1,
                 currency_id: 'BRL',
@@ -861,7 +965,7 @@ app.post('/pagamentos/criar', autenticarToken, async (req, res) => {
 
         const preference = await preferenceClient.create({
             body: {
-                items: itensNormalizados,
+                items: itensMercadoPago,
                 external_reference: pedido.externalReference,
                 metadata: {
                     historico_id: pedido.historicoId,
