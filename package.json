@@ -6,7 +6,8 @@
   "scripts": {
     "test": "node --test --test-concurrency=1 \"tests/**/*.test.js\"",
     "start": "node server.js",
-    "migrate": "node scripts/migrate.js"
+    "migrate": "node scripts/migrate.js",
+    "criar-admin": "node scripts/criar-admin.js"
   },
   "keywords": [],
   "author": "",
