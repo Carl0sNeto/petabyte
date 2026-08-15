@@ -5,9 +5,24 @@
 CREATE TABLE IF NOT EXISTS usuarios (
     id SERIAL PRIMARY KEY,
     nome VARCHAR(100) NOT NULL,
-    email VARCHAR(255) NOT NULL,
+    email VARCHAR(255) NOT NULL UNIQUE,
     senha TEXT NOT NULL,
     criado_em TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Tabela de Produtos (fonte de verdade dos preços)
+-- O servidor nunca aceita preço vindo do cliente: ele é sempre lido daqui.
+CREATE TABLE IF NOT EXISTS produtos (
+    id SERIAL PRIMARY KEY,
+    nome VARCHAR(150) NOT NULL UNIQUE,
+    descricao TEXT NOT NULL DEFAULT '',
+    preco NUMERIC(10,2) NOT NULL CHECK (preco > 0),
+    categoria VARCHAR(50) NOT NULL,
+    imagem_url TEXT NOT NULL DEFAULT '',
+    estoque INTEGER NOT NULL DEFAULT 0 CHECK (estoque >= 0),
+    ativo BOOLEAN NOT NULL DEFAULT TRUE,
+    criado_em TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    atualizado_em TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
 -- Tabela de Histórico de Compras
@@ -53,15 +68,19 @@ CREATE TABLE IF NOT EXISTS pedidos (
 );
 
 -- Tabela de Itens do Pedido
+-- nome e preco_unitario ficam congelados na linha: o histórico do pedido
+-- não muda se o produto for renomeado, reprecificado ou removido depois.
 CREATE TABLE IF NOT EXISTS pedido_itens (
     id SERIAL PRIMARY KEY,
     pedido_id INTEGER NOT NULL,
+    produto_id INTEGER,
     nome VARCHAR(150) NOT NULL,
     preco_unitario NUMERIC(10,2) NOT NULL,
     quantidade INTEGER NOT NULL,
     total NUMERIC(10,2) NOT NULL,
     criado_em TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    CONSTRAINT fk_item_pedido FOREIGN KEY (pedido_id) REFERENCES pedidos(id) ON DELETE CASCADE
+    CONSTRAINT fk_item_pedido FOREIGN KEY (pedido_id) REFERENCES pedidos(id) ON DELETE CASCADE,
+    CONSTRAINT fk_item_produto FOREIGN KEY (produto_id) REFERENCES produtos(id) ON DELETE SET NULL
 );
 
 -- Índices para melhor performance
@@ -72,6 +91,9 @@ CREATE INDEX IF NOT EXISTS idx_password_resets_usuario ON password_resets(usuari
 CREATE INDEX IF NOT EXISTS idx_pedidos_usuario ON pedidos(usuario_id);
 CREATE INDEX IF NOT EXISTS idx_pedidos_historico ON pedidos(historico_id);
 CREATE INDEX IF NOT EXISTS idx_pedido_itens_pedido ON pedido_itens(pedido_id);
+CREATE INDEX IF NOT EXISTS idx_pedido_itens_produto ON pedido_itens(produto_id);
+CREATE INDEX IF NOT EXISTS idx_produtos_categoria ON produtos(categoria);
+CREATE INDEX IF NOT EXISTS idx_produtos_ativo ON produtos(ativo);
 
 -- Confirmação
 SELECT 'Banco de dados inicializado com sucesso!' AS mensagem;
