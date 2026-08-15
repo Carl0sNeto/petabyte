@@ -393,44 +393,114 @@ async function sincronizarPagamentoNoBanco(pagamento) {
         throw new Error('Pagamento sem referência de pedido válida.');
     }
 
-    const pedidoResult = await pool.query(
-        'SELECT id, usuario_id, expira_em FROM pedidos WHERE historico_id = $1 LIMIT 1',
-        [historicoId]
-    );
+    const STATUS_QUE_DEVOLVEM_ESTOQUE = ['refunded', 'cancelled', 'charged_back'];
 
-    if (pedidoResult.rowCount === 0) {
-        throw new Error('Pedido não encontrado para este pagamento.');
+    const client = await pool.connect();
+    let pedidoExpirado = false;
+    let resultado = null;
+
+    try {
+        await client.query('BEGIN');
+
+        // FOR UPDATE serializa /pagamentos/confirmar e o webhook, que podem
+        // processar o mesmo pagamento simultaneamente.
+        const pedidoResult = await client.query(
+            'SELECT id, usuario_id, expira_em, estoque_baixado FROM pedidos WHERE historico_id = $1 LIMIT 1 FOR UPDATE',
+            [historicoId]
+        );
+
+        if (pedidoResult.rowCount === 0) {
+            throw new Error('Pedido não encontrado para este pagamento.');
+        }
+
+        const pedido = pedidoResult.rows[0];
+
+        if (pedido.expira_em && new Date(pedido.expira_em) < new Date()) {
+            await client.query(
+                `UPDATE pedidos
+                 SET status = 'Expirado',
+                     payment_status = 'expired',
+                     atualizado_em = CURRENT_TIMESTAMP
+                 WHERE id = $1`,
+                [pedido.id]
+            );
+            await client.query('UPDATE historico_compras SET status = $1 WHERE id = $2', ['Expirado', historicoId]);
+            await client.query('COMMIT');
+            pedidoExpirado = true;
+        } else {
+            const statusPedido = mapearStatusPagamento(pagamento.status);
+            const aprovado = pagamento.status === 'approved';
+            const devolveEstoque = STATUS_QUE_DEVOLVEM_ESTOQUE.includes(pagamento.status);
+
+            const itensDoPedido = await client.query(
+                'SELECT produto_id, quantidade FROM pedido_itens WHERE pedido_id = $1 AND produto_id IS NOT NULL',
+                [pedido.id]
+            );
+
+            // Debita uma única vez, na primeira aprovação. A flag no pedido é o
+            // que impede o webhook de debitar de novo a cada reenvio.
+            if (aprovado && !pedido.estoque_baixado) {
+                for (const item of itensDoPedido.rows) {
+                    const baixa = await client.query(
+                        `UPDATE produtos
+                         SET estoque = estoque - $1, atualizado_em = CURRENT_TIMESTAMP
+                         WHERE id = $2 AND estoque >= $1`,
+                        [item.quantidade, item.produto_id]
+                    );
+
+                    if (baixa.rowCount === 0) {
+                        console.warn(
+                            `[ESTOQUE] Pedido ${pedido.id}: estoque insuficiente para o produto ${item.produto_id} ` +
+                            `(${item.quantidade} un.). O pagamento já foi aprovado; revisar manualmente.`
+                        );
+                    }
+                }
+
+                await client.query('UPDATE pedidos SET estoque_baixado = TRUE WHERE id = $1', [pedido.id]);
+            }
+
+            // Estorno ou cancelamento depois da baixa: devolve ao catálogo.
+            if (devolveEstoque && pedido.estoque_baixado) {
+                for (const item of itensDoPedido.rows) {
+                    await client.query(
+                        `UPDATE produtos
+                         SET estoque = estoque + $1, atualizado_em = CURRENT_TIMESTAMP
+                         WHERE id = $2`,
+                        [item.quantidade, item.produto_id]
+                    );
+                }
+
+                await client.query('UPDATE pedidos SET estoque_baixado = FALSE WHERE id = $1', [pedido.id]);
+                console.log(`[ESTOQUE] Pedido ${pedido.id}: estoque devolvido após status "${pagamento.status}".`);
+            }
+
+            await client.query(
+                `UPDATE pedidos
+                 SET payment_id = $1,
+                     payment_status = $2,
+                     status = $3,
+                     atualizado_em = CURRENT_TIMESTAMP
+                 WHERE id = $4`,
+                [String(pagamento.id), pagamento.status, statusPedido, pedido.id]
+            );
+
+            await client.query('UPDATE historico_compras SET status = $1 WHERE id = $2', [statusPedido, historicoId]);
+            await client.query('COMMIT');
+
+            resultado = { historicoId, pedidoId: pedido.id, status: pagamento.status, statusPedido };
+        }
+    } catch (erro) {
+        await client.query('ROLLBACK').catch(() => {});
+        throw erro;
+    } finally {
+        client.release();
     }
 
-    const pedido = pedidoResult.rows[0];
-    if (pedido.expira_em && new Date(pedido.expira_em) < new Date()) {
-        await pool.query(
-            `UPDATE pedidos
-             SET status = 'Expirado',
-                 payment_status = 'expired',
-                 atualizado_em = CURRENT_TIMESTAMP
-             WHERE id = $1`,
-            [pedido.id]
-        );
-        await pool.query('UPDATE historico_compras SET status = $1 WHERE id = $2', ['Expirado', historicoId]);
+    if (pedidoExpirado) {
         throw new Error('Este pedido expirou após 1 minuto e não pode mais ser confirmado.');
     }
 
-    const statusPedido = mapearStatusPagamento(pagamento.status);
-
-    await pool.query(
-        `UPDATE pedidos
-         SET payment_id = $1,
-             payment_status = $2,
-             status = $3,
-             atualizado_em = CURRENT_TIMESTAMP
-         WHERE id = $4`,
-        [String(pagamento.id), pagamento.status, statusPedido, pedido.id]
-    );
-
-    await pool.query('UPDATE historico_compras SET status = $1 WHERE id = $2', [statusPedido, historicoId]);
-
-    return { historicoId, pedidoId: pedido.id, status: pagamento.status, statusPedido };
+    return resultado;
 }
 
 function autenticarToken(req, res, next) {
@@ -702,7 +772,9 @@ module.exports = {
     calcularFrete,
     validarFormatoCarrinho,
     resolverItensCarrinho,
-    mapearStatusPagamento
+    mapearStatusPagamento,
+    registrarPedidoPendente,
+    sincronizarPagamentoNoBanco
 };
 
 app.get('/health', (req, res) => {
