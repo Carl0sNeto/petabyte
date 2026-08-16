@@ -1328,6 +1328,150 @@ app.delete('/admin/produtos/:id', limitadorAdmin, autenticarToken, exigirAdmin, 
     }
 });
 
+// Somente leitura. Alterar status de pagamento pela mão criaria divergência
+// com o Mercado Pago, que é a fonte de verdade — a sincronização acontece pelo
+// webhook e por /pagamentos/confirmar.
+app.get('/admin/pedidos', limitadorAdmin, autenticarToken, exigirAdmin, async (req, res) => {
+    const porPagina = Math.min(100, Math.max(1, Number(req.query.porPagina) || 25));
+    const pagina = Math.max(1, Number(req.query.pagina) || 1);
+    const status = typeof req.query.status === 'string' ? req.query.status.trim() : '';
+
+    const filtros = [];
+    const valores = [];
+
+    if (status && status !== 'todos') {
+        valores.push(status);
+        filtros.push(`p.status = $${valores.length}`);
+    }
+
+    const onde = filtros.length > 0 ? `WHERE ${filtros.join(' AND ')}` : '';
+
+    try {
+        const total = await pool.query(`SELECT COUNT(*)::int AS total FROM pedidos p ${onde}`, valores);
+
+        valores.push(porPagina, (pagina - 1) * porPagina);
+
+        const resultado = await pool.query(
+            `SELECT p.id, p.external_reference, p.status, p.payment_status, p.payment_id,
+                    p.subtotal, p.frete, p.total, p.moeda, p.estoque_baixado,
+                    p.criado_em, p.atualizado_em,
+                    u.id AS usuario_id, u.nome AS usuario_nome, u.email AS usuario_email,
+                    COUNT(i.id)::int AS total_itens
+             FROM pedidos p
+             JOIN usuarios u ON u.id = p.usuario_id
+             LEFT JOIN pedido_itens i ON i.pedido_id = p.id
+             ${onde}
+             GROUP BY p.id, u.id
+             ORDER BY p.criado_em DESC
+             LIMIT $${valores.length - 1} OFFSET $${valores.length}`,
+            valores
+        );
+
+        const statusDisponiveis = await pool.query('SELECT DISTINCT status FROM pedidos ORDER BY status');
+
+        return res.json({
+            pedidos: resultado.rows.map((linha) => ({
+                id: linha.id,
+                referencia: linha.external_reference,
+                status: linha.status,
+                statusPagamento: linha.payment_status,
+                paymentId: linha.payment_id,
+                subtotal: Number(linha.subtotal),
+                frete: Number(linha.frete),
+                total: Number(linha.total),
+                moeda: linha.moeda,
+                estoqueBaixado: linha.estoque_baixado,
+                totalItens: linha.total_itens,
+                criadoEm: linha.criado_em,
+                atualizadoEm: linha.atualizado_em,
+                cliente: {
+                    id: linha.usuario_id,
+                    nome: linha.usuario_nome,
+                    email: linha.usuario_email
+                }
+            })),
+            paginacao: {
+                pagina,
+                porPagina,
+                total: total.rows[0].total,
+                totalPaginas: Math.max(1, Math.ceil(total.rows[0].total / porPagina))
+            },
+            statusDisponiveis: statusDisponiveis.rows.map((linha) => linha.status)
+        });
+    } catch (erro) {
+        console.error('Erro ao listar pedidos no painel:', erro);
+        return res.status(500).json({ mensagem: 'Não foi possível carregar os pedidos.' });
+    }
+});
+
+app.get('/admin/pedidos/:id', limitadorAdmin, autenticarToken, exigirAdmin, async (req, res) => {
+    const id = Number(req.params.id);
+
+    if (!Number.isInteger(id) || id <= 0) {
+        return res.status(400).json({ mensagem: 'Identificador inválido.' });
+    }
+
+    try {
+        const pedidoResult = await pool.query(
+            `SELECT p.*, u.nome AS usuario_nome, u.email AS usuario_email
+             FROM pedidos p
+             JOIN usuarios u ON u.id = p.usuario_id
+             WHERE p.id = $1`,
+            [id]
+        );
+
+        if (pedidoResult.rowCount === 0) {
+            return res.status(404).json({ mensagem: 'Pedido não encontrado.' });
+        }
+
+        const pedido = pedidoResult.rows[0];
+
+        const itensResult = await pool.query(
+            `SELECT id, produto_id, nome, preco_unitario, quantidade, total
+             FROM pedido_itens WHERE pedido_id = $1 ORDER BY id`,
+            [id]
+        );
+
+        return res.json({
+            pedido: {
+                id: pedido.id,
+                referencia: pedido.external_reference,
+                preferenceId: pedido.preference_id,
+                paymentId: pedido.payment_id,
+                status: pedido.status,
+                statusPagamento: pedido.payment_status,
+                subtotal: Number(pedido.subtotal),
+                frete: Number(pedido.frete),
+                total: Number(pedido.total),
+                moeda: pedido.moeda,
+                estoqueBaixado: pedido.estoque_baixado,
+                expiraEm: pedido.expira_em,
+                criadoEm: pedido.criado_em,
+                atualizadoEm: pedido.atualizado_em,
+                cliente: {
+                    id: pedido.usuario_id,
+                    nome: pedido.usuario_nome,
+                    email: pedido.usuario_email
+                }
+            },
+            itens: itensResult.rows.map((linha) => ({
+                id: linha.id,
+                produtoId: linha.produto_id,
+                nome: linha.nome,
+                precoUnitario: Number(linha.preco_unitario),
+                quantidade: linha.quantidade,
+                total: Number(linha.total),
+                // produto_id nulo significa que o produto saiu do catálogo
+                // depois da compra; nome e preço aqui são os do momento.
+                produtoRemovido: linha.produto_id === null
+            }))
+        });
+    } catch (erro) {
+        console.error('Erro ao buscar pedido no painel:', erro);
+        return res.status(500).json({ mensagem: 'Não foi possível carregar o pedido.' });
+    }
+});
+
 app.post('/pagamentos/criar', autenticarToken, async (req, res) => {
     if (!bancoDisponivel) {
         return res.status(503).json({ mensagem: 'Banco de dados indisponível no momento.' });
