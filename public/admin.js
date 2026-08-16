@@ -391,7 +391,7 @@ async function iniciar() {
     if (!dados.usuario || dados.usuario.admin !== true) {
         bloquear(
             'Acesso restrito',
-            'Esta conta não tem permissão de administrador. Peça a quem administra o servidor para rodar "npm run criar-admin" com o seu e-mail.',
+            'Você não tem permissão de administrador.',
             false
         );
         return;
