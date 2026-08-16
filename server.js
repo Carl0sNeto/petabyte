@@ -156,6 +156,16 @@ function avisarWebhookSemSegredo() {
     );
 }
 
+// Painel administrativo. O teto é generoso porque uma sessão de trabalho faz
+// muitas requisições legítimas, mas ainda limita varredura automatizada.
+const limitadorAdmin = rateLimit({
+    windowMs: 15 * 60 * 1000,
+    limit: 400,
+    standardHeaders: 'draft-7',
+    legacyHeaders: false,
+    message: { mensagem: 'Muitas requisições ao painel. Aguarde alguns minutos.' }
+});
+
 // Cadastro público (newsletter e criação de conta).
 const limitadorCadastro = rateLimit({
     windowMs: 60 * 60 * 1000,
@@ -596,6 +606,110 @@ function autenticarToken(req, res, next) {
     }
 }
 
+// Confere a flag no banco a cada requisição, em vez de ler do JWT. Assim,
+// revogar o acesso tem efeito imediato: um token emitido antes da revogação
+// deixa de valer sem precisar esperar as 2h de expiração.
+async function exigirAdmin(req, res, next) {
+    if (!bancoDisponivel) {
+        return res.status(503).json({ mensagem: 'Banco de dados indisponível no momento.' });
+    }
+
+    try {
+        const resultado = await pool.query('SELECT admin FROM usuarios WHERE id = $1', [req.usuario.id]);
+
+        if (resultado.rowCount === 0 || resultado.rows[0].admin !== true) {
+            return res.status(403).json({ mensagem: 'Acesso restrito a administradores.' });
+        }
+
+        return next();
+    } catch (erro) {
+        console.error('Erro ao verificar permissão de administrador:', erro);
+        return res.status(500).json({ mensagem: 'Não foi possível verificar a permissão.' });
+    }
+}
+
+const CATEGORIAS_VALIDAS = ['tecnologia', 'acessorios', 'casa'];
+
+// Valida e normaliza o corpo enviado pelo painel. Em criação todos os campos
+// obrigatórios precisam vir; em edição, apenas os enviados são conferidos.
+function validarDadosProduto(corpo, { parcial = false } = {}) {
+    const erros = [];
+    const dados = {};
+
+    const definido = (campo) => corpo[campo] !== undefined && corpo[campo] !== null;
+
+    if (definido('nome')) {
+        const nome = String(corpo.nome).trim();
+        if (nome.length < 2 || nome.length > 150) {
+            erros.push('O nome precisa ter entre 2 e 150 caracteres.');
+        } else {
+            dados.nome = nome;
+        }
+    } else if (!parcial) {
+        erros.push('O nome é obrigatório.');
+    }
+
+    if (definido('preco')) {
+        const preco = Number(corpo.preco);
+        if (!Number.isFinite(preco) || preco <= 0) {
+            erros.push('O preço precisa ser um número maior que zero.');
+        } else if (preco > 9999999.99) {
+            erros.push('O preço excede o limite da coluna.');
+        } else {
+            dados.preco = Number(preco.toFixed(2));
+        }
+    } else if (!parcial) {
+        erros.push('O preço é obrigatório.');
+    }
+
+    if (definido('estoque')) {
+        const estoque = Number(corpo.estoque);
+        if (!Number.isInteger(estoque) || estoque < 0) {
+            erros.push('O estoque precisa ser um número inteiro igual ou maior que zero.');
+        } else {
+            dados.estoque = estoque;
+        }
+    } else if (!parcial) {
+        dados.estoque = 0;
+    }
+
+    if (definido('categoria')) {
+        const categoria = String(corpo.categoria).trim().toLowerCase();
+        if (!CATEGORIAS_VALIDAS.includes(categoria)) {
+            erros.push(`A categoria precisa ser uma destas: ${CATEGORIAS_VALIDAS.join(', ')}.`);
+        } else {
+            dados.categoria = categoria;
+        }
+    } else if (!parcial) {
+        erros.push('A categoria é obrigatória.');
+    }
+
+    if (definido('descricao')) {
+        dados.descricao = String(corpo.descricao).trim().slice(0, 2000);
+    } else if (!parcial) {
+        dados.descricao = '';
+    }
+
+    if (definido('imagemUrl')) {
+        const url = String(corpo.imagemUrl).trim();
+        if (url && !/^https:\/\//i.test(url)) {
+            erros.push('A URL da imagem precisa começar com https://.');
+        } else {
+            dados.imagemUrl = url;
+        }
+    } else if (!parcial) {
+        dados.imagemUrl = '';
+    }
+
+    if (definido('ativo')) {
+        dados.ativo = corpo.ativo === true || corpo.ativo === 'true';
+    } else if (!parcial) {
+        dados.ativo = true;
+    }
+
+    return { valido: erros.length === 0, erros, dados };
+}
+
 async function popularHistoricoPadrao() {
     const usuarios = await pool.query('SELECT id FROM usuarios');
 
@@ -915,7 +1029,7 @@ app.post('/auth/login', limitadorLogin, async (req, res) => {
 
 app.get('/auth/me', autenticarToken, async (req, res) => {
     try {
-        const usuarioResult = await pool.query('SELECT id, nome, email FROM usuarios WHERE id = $1', [req.usuario.id]);
+        const usuarioResult = await pool.query('SELECT id, nome, email, admin FROM usuarios WHERE id = $1', [req.usuario.id]);
 
         if (usuarioResult.rowCount === 0) {
             return res.status(404).json({ mensagem: 'Usuário não encontrado.' });
@@ -1043,6 +1157,174 @@ app.get('/produtos', async (req, res) => {
     } catch (erro) {
         console.error('Erro ao listar produtos:', erro);
         return res.status(500).json({ mensagem: 'Não foi possível carregar os produtos.' });
+    }
+});
+
+// ---------------------------------------------------------------------------
+// Painel administrativo
+//
+// Toda rota abaixo exige token válido E a flag admin conferida no banco.
+// A ordem importa: autenticarToken preenche req.usuario, exigirAdmin o consulta.
+// ---------------------------------------------------------------------------
+
+function serializarProduto(linha) {
+    return {
+        id: linha.id,
+        nome: linha.nome,
+        descricao: linha.descricao,
+        preco: Number(linha.preco),
+        categoria: linha.categoria,
+        imagemUrl: linha.imagem_url,
+        estoque: linha.estoque,
+        ativo: linha.ativo,
+        criadoEm: linha.criado_em,
+        atualizadoEm: linha.atualizado_em
+    };
+}
+
+// Lista o catálogo inteiro, inclusive inativos — diferente do GET /produtos
+// público, que só devolve o que está à venda.
+app.get('/admin/produtos', limitadorAdmin, autenticarToken, exigirAdmin, async (req, res) => {
+    try {
+        const resultado = await pool.query(
+            `SELECT p.id, p.nome, p.descricao, p.preco, p.categoria, p.imagem_url,
+                    p.estoque, p.ativo, p.criado_em, p.atualizado_em,
+                    COALESCE(SUM(i.quantidade) FILTER (WHERE ped.status = 'Pago'), 0)::int AS vendidos
+             FROM produtos p
+             LEFT JOIN pedido_itens i ON i.produto_id = p.id
+             LEFT JOIN pedidos ped ON ped.id = i.pedido_id
+             GROUP BY p.id
+             ORDER BY p.id`
+        );
+
+        return res.json({
+            produtos: resultado.rows.map((linha) => ({ ...serializarProduto(linha), vendidos: linha.vendidos })),
+            categorias: CATEGORIAS_VALIDAS
+        });
+    } catch (erro) {
+        console.error('Erro ao listar produtos no painel:', erro);
+        return res.status(500).json({ mensagem: 'Não foi possível carregar os produtos.' });
+    }
+});
+
+app.post('/admin/produtos', limitadorAdmin, autenticarToken, exigirAdmin, async (req, res) => {
+    const validacao = validarDadosProduto(req.body || {});
+
+    if (!validacao.valido) {
+        return res.status(400).json({ mensagem: validacao.erros[0], erros: validacao.erros });
+    }
+
+    const d = validacao.dados;
+
+    try {
+        const resultado = await pool.query(
+            `INSERT INTO produtos (nome, descricao, preco, categoria, imagem_url, estoque, ativo)
+             VALUES ($1, $2, $3, $4, $5, $6, $7)
+             RETURNING *`,
+            [d.nome, d.descricao, d.preco, d.categoria, d.imagemUrl, d.estoque, d.ativo]
+        );
+
+        console.log(`[ADMIN] Usuário ${req.usuario.id} criou o produto "${d.nome}".`);
+        return res.status(201).json({ mensagem: 'Produto criado.', produto: serializarProduto(resultado.rows[0]) });
+    } catch (erro) {
+        if (erro.code === '23505') {
+            return res.status(409).json({ mensagem: 'Já existe um produto com esse nome.' });
+        }
+
+        console.error('Erro ao criar produto:', erro);
+        return res.status(500).json({ mensagem: 'Não foi possível criar o produto.' });
+    }
+});
+
+app.put('/admin/produtos/:id', limitadorAdmin, autenticarToken, exigirAdmin, async (req, res) => {
+    const id = Number(req.params.id);
+
+    if (!Number.isInteger(id) || id <= 0) {
+        return res.status(400).json({ mensagem: 'Identificador inválido.' });
+    }
+
+    const validacao = validarDadosProduto(req.body || {}, { parcial: true });
+
+    if (!validacao.valido) {
+        return res.status(400).json({ mensagem: validacao.erros[0], erros: validacao.erros });
+    }
+
+    const colunas = {
+        nome: 'nome',
+        descricao: 'descricao',
+        preco: 'preco',
+        categoria: 'categoria',
+        imagemUrl: 'imagem_url',
+        estoque: 'estoque',
+        ativo: 'ativo'
+    };
+
+    const atribuicoes = [];
+    const valores = [];
+
+    for (const [campo, coluna] of Object.entries(colunas)) {
+        if (validacao.dados[campo] !== undefined) {
+            valores.push(validacao.dados[campo]);
+            atribuicoes.push(`${coluna} = $${valores.length}`);
+        }
+    }
+
+    if (atribuicoes.length === 0) {
+        return res.status(400).json({ mensagem: 'Nenhum campo para atualizar.' });
+    }
+
+    valores.push(id);
+
+    try {
+        const resultado = await pool.query(
+            `UPDATE produtos SET ${atribuicoes.join(', ')}, atualizado_em = CURRENT_TIMESTAMP
+             WHERE id = $${valores.length}
+             RETURNING *`,
+            valores
+        );
+
+        if (resultado.rowCount === 0) {
+            return res.status(404).json({ mensagem: 'Produto não encontrado.' });
+        }
+
+        console.log(`[ADMIN] Usuário ${req.usuario.id} editou o produto ${id}: ${atribuicoes.join(', ')}.`);
+        return res.json({ mensagem: 'Produto atualizado.', produto: serializarProduto(resultado.rows[0]) });
+    } catch (erro) {
+        if (erro.code === '23505') {
+            return res.status(409).json({ mensagem: 'Já existe um produto com esse nome.' });
+        }
+
+        console.error('Erro ao atualizar produto:', erro);
+        return res.status(500).json({ mensagem: 'Não foi possível atualizar o produto.' });
+    }
+});
+
+app.delete('/admin/produtos/:id', limitadorAdmin, autenticarToken, exigirAdmin, async (req, res) => {
+    const id = Number(req.params.id);
+
+    if (!Number.isInteger(id) || id <= 0) {
+        return res.status(400).json({ mensagem: 'Identificador inválido.' });
+    }
+
+    try {
+        // Itens de pedido apontam para o produto com ON DELETE SET NULL: o
+        // histórico sobrevive porque nome e preço estão congelados na linha.
+        const vinculos = await pool.query('SELECT COUNT(*)::int AS total FROM pedido_itens WHERE produto_id = $1', [id]);
+        const resultado = await pool.query('DELETE FROM produtos WHERE id = $1 RETURNING nome', [id]);
+
+        if (resultado.rowCount === 0) {
+            return res.status(404).json({ mensagem: 'Produto não encontrado.' });
+        }
+
+        console.log(`[ADMIN] Usuário ${req.usuario.id} excluiu o produto ${id} ("${resultado.rows[0].nome}").`);
+
+        return res.json({
+            mensagem: 'Produto excluído.',
+            itensDePedidoAfetados: vinculos.rows[0].total
+        });
+    } catch (erro) {
+        console.error('Erro ao excluir produto:', erro);
+        return res.status(500).json({ mensagem: 'Não foi possível excluir o produto.' });
     }
 });
 
