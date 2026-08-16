@@ -29,7 +29,12 @@ Armazena dados dos usuários cadastrados.
 | nome | VARCHAR(100) NOT NULL | Nome completo do usuário |
 | email | VARCHAR(255) NOT NULL UNIQUE | Email do usuário |
 | senha | TEXT NOT NULL | Senha criptografada com bcrypt |
+| admin | BOOLEAN NOT NULL DEFAULT FALSE | Acesso ao painel administrativo |
 | criado_em | TIMESTAMP | Data/hora do cadastro |
+
+O cadastro público sempre grava `admin = FALSE`. A promoção acontece apenas pela
+linha de comando (`npm run criar-admin`), nunca pela interface — veja
+[Painel administrativo](#painel-administrativo).
 
 ### 2. **produtos**
 Catálogo e **fonte de verdade dos preços**. O servidor nunca aceita preço vindo
@@ -148,9 +153,57 @@ npm run migrate
 |---------|-----------|
 | `migrations/001_catalogo_e_integridade.sql` | Cria `produtos` com os 6 itens iniciais, adiciona `pedido_itens.produto_id` e a constraint UNIQUE em `usuarios.email` |
 | `migrations/002_controle_de_estoque.sql` | Adiciona `pedidos.estoque_baixado` |
+| `migrations/003_perfil_administrador.sql` | Adiciona `usuarios.admin` e um índice parcial dos administradores |
 
 A migration 001 aborta com erro se houver e-mails duplicados em `usuarios`.
 Nesse caso, consolide os registros antes de aplicá-la.
+
+## Painel administrativo
+
+Fica em `/admin.html` e reaproveita o login normal da loja — não há senha nem
+sessão separada.
+
+### Criando o primeiro administrador
+
+1. Cadastre-se normalmente pelo site, como qualquer cliente.
+2. Rode, no servidor:
+
+```bash
+npm run criar-admin -- seu-email@exemplo.com
+```
+
+3. Saia e entre de novo para o token passar a refletir a permissão.
+
+Outros comandos:
+
+```bash
+npm run criar-admin -- --listar                     # lista os administradores
+npm run criar-admin -- alguem@exemplo.com --revogar # revoga o acesso
+```
+
+O script recusa revogar o último administrador, o que deixaria o painel
+inacessível.
+
+### O que o painel faz
+
+| Área | Operações |
+|------|-----------|
+| Produtos | Criar, editar, excluir; ajustar preço, estoque, categoria, imagem e descrição; tirar de circulação sem excluir |
+| Pedidos | Consultar com filtro por status e paginação, e abrir o detalhe com itens e cliente |
+
+Pedidos são **somente leitura**. Alterar status de pagamento pela mão criaria
+divergência com o Mercado Pago, que é a fonte de verdade — a sincronização
+acontece pelo webhook e por `/pagamentos/confirmar`.
+
+### Como o acesso é verificado
+
+Toda rota `/admin/*` passa por `autenticarToken` e depois por `exigirAdmin`, que
+**consulta a flag no banco a cada requisição** em vez de ler do JWT. Por isso
+revogar o acesso tem efeito imediato: um token emitido antes da revogação para
+de funcionar na hora, sem esperar as 2h de expiração.
+
+Esconder a interface no navegador é conveniência de usabilidade, não segurança.
+A proteção real está no servidor.
 
 ## Variáveis de Ambiente
 

@@ -7,6 +7,8 @@ CREATE TABLE IF NOT EXISTS usuarios (
     nome VARCHAR(100) NOT NULL,
     email VARCHAR(255) NOT NULL UNIQUE,
     senha TEXT NOT NULL,
+    -- Nunca definido pelo cadastro público: promoção só via `npm run criar-admin`.
+    admin BOOLEAN NOT NULL DEFAULT FALSE,
     criado_em TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 

@@ -25,16 +25,28 @@ async function criarProduto({ preco, estoque, nome = null, ativo = true }) {
     return resultado.rows[0];
 }
 
-async function criarUsuario() {
+async function criarUsuario({ admin = false } = {}) {
     const email = `${PREFIXO}${Date.now()}_${Math.random().toString(36).slice(2, 8)}@local.test`;
 
     const resultado = await pool.query(
-        `INSERT INTO usuarios (nome, email, senha) VALUES ('Usuario de Teste', $1, 'hash-irrelevante')
-         RETURNING id, email`,
-        [email]
+        `INSERT INTO usuarios (nome, email, senha, admin) VALUES ('Usuario de Teste', $1, 'hash-irrelevante', $2)
+         RETURNING id, email, admin`,
+        [email, admin]
     );
 
     return resultado.rows[0];
+}
+
+// Emite um token igual ao do login, sem passar por bcrypt: os testes de
+// autorização se importam com o que o middleware faz com o token, não com a
+// verificação de senha, que já é coberta em outro lugar.
+function emitirToken(usuario) {
+    const jwt = require('jsonwebtoken');
+    return jwt.sign({ id: usuario.id, email: usuario.email }, process.env.JWT_SECRET, { expiresIn: '2h' });
+}
+
+async function definirAdmin(usuarioId, admin) {
+    await pool.query('UPDATE usuarios SET admin = $1 WHERE id = $2', [admin, usuarioId]);
 }
 
 async function lerEstoque(produtoId) {
@@ -49,4 +61,4 @@ async function limpar() {
     await pool.query('DELETE FROM produtos WHERE nome LIKE $1', [`${PREFIXO}%`]);
 }
 
-module.exports = { criarProduto, criarUsuario, lerEstoque, limpar, pool, PREFIXO };
+module.exports = { criarProduto, criarUsuario, emitirToken, definirAdmin, lerEstoque, limpar, pool, PREFIXO };
