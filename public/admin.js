@@ -492,9 +492,9 @@ async function iniciar() {
 document.addEventListener('DOMContentLoaded', () => {
     iniciar();
 
-    document.querySelectorAll('.tab').forEach((aba) => {
+    document.querySelectorAll('.aba').forEach((aba) => {
         aba.addEventListener('click', () => {
-            document.querySelectorAll('.tab').forEach((outra) => outra.classList.remove('active'));
+            document.querySelectorAll('.aba').forEach((outra) => outra.classList.remove('active'));
             aba.classList.add('active');
 
             const alvo = aba.dataset.aba;
