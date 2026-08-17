@@ -1,0 +1,235 @@
+/* ==========================================================================
+   Petabyte — componentes exclusivos do painel administrativo
+   --------------------------------------------------------------------------
+   Carrega depois de estilos.css e reaproveita os mesmos tokens. Aqui ficam só
+   as peças que a loja não tem: tabelas densas, modais, selos de situação,
+   miniaturas e paginação.
+
+   O painel é operado, não lido: a leitura é por varredura, então o texto é
+   menor e a informação mais densa que na vitrine.
+   ========================================================================== */
+
+body { font-size: 15px; }
+
+main { padding: 1.6rem 0 3rem; }
+
+/* Identificação de quem está logado, no cabeçalho */
+.whoami {
+    font-size: .84rem;
+    color: #9fb3cd;
+    font-variant-numeric: tabular-nums;
+}
+
+/* ==========================================================================
+   Tabelas
+   ========================================================================== */
+
+.table-wrap {
+    overflow-x: auto;
+    border: 1px solid var(--borda);
+    border-radius: var(--raio);
+    background: var(--superficie);
+}
+
+table { border-collapse: collapse; width: 100%; font-size: .88rem; }
+
+th, td {
+    text-align: left;
+    padding: .65rem .8rem;
+    border-bottom: 1px solid var(--borda);
+    vertical-align: middle;
+}
+
+th {
+    background: var(--superficie-2);
+    font-size: .74rem;
+    text-transform: uppercase;
+    letter-spacing: .06em;
+    color: var(--texto-2);
+    font-weight: 700;
+    white-space: nowrap;
+}
+
+tbody tr:last-child td { border-bottom: none; }
+tbody tr:hover { background: var(--superficie-2); }
+
+td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.sha { font-family: ui-monospace, Consolas, monospace; font-size: .82rem; color: var(--texto-2); }
+
+.acoes { display: flex; gap: .35rem; justify-content: flex-end; }
+
+/* ==========================================================================
+   Selos de situação
+   ========================================================================== */
+
+.pill {
+    display: inline-block;
+    padding: .16rem .55rem;
+    border-radius: 999px;
+    font-size: .72rem;
+    font-weight: 700;
+    white-space: nowrap;
+}
+.pill-ok { background: var(--sucesso-suave); color: var(--sucesso); }
+.pill-off { background: var(--superficie-2); color: var(--texto-2); border: 1px solid var(--borda); }
+.pill-warn { background: var(--alerta-suave); color: var(--alerta); }
+.pill-danger { background: var(--erro-suave); color: var(--erro); }
+
+/* ==========================================================================
+   Miniaturas do catálogo
+   ========================================================================== */
+
+.thumb {
+    width: 46px; height: 46px;
+    object-fit: contain;
+    border-radius: .35rem;
+    border: 1px solid var(--borda);
+    background: #fff;
+    padding: 2px;
+    display: block;
+}
+.thumb-vazia {
+    width: 46px; height: 46px;
+    border-radius: .35rem;
+    border: 1px dashed var(--borda-forte);
+    background: var(--superficie-2);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: .6rem;
+    color: var(--texto-3);
+    text-align: center;
+    line-height: 1.1;
+}
+
+/* ==========================================================================
+   Botão de risco
+   ========================================================================== */
+
+.btn-danger {
+    background: var(--erro-suave);
+    color: var(--erro);
+    border-color: #f3c9c9;
+}
+.btn-danger:hover { background: #fbe0e0; border-color: #e9adad; }
+
+/* ==========================================================================
+   Modais
+   ========================================================================== */
+
+dialog {
+    border: none;
+    border-radius: var(--raio-g);
+    padding: 0;
+    width: min(640px, calc(100% - 2rem));
+    box-shadow: var(--sombra-3);
+    color: var(--texto);
+    background: var(--superficie);
+}
+dialog::backdrop { background: rgba(8, 18, 33, .55); }
+
+.dialog-head {
+    padding: 1.05rem 1.3rem;
+    border-bottom: 1px solid var(--borda);
+    font-weight: 700;
+    font-size: 1.02rem;
+}
+.dialog-body { padding: 1.3rem; }
+.dialog-foot {
+    padding: .95rem 1.3rem;
+    border-top: 1px solid var(--borda);
+    background: var(--superficie-2);
+    display: flex;
+    justify-content: flex-end;
+    gap: .6rem;
+    border-radius: 0 0 var(--raio-g) var(--raio-g);
+}
+
+.form-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: .9rem; }
+.form-grid .full { grid-column: 1 / -1; }
+
+.detalhe-linha {
+    display: flex;
+    justify-content: space-between;
+    gap: 1rem;
+    padding: .45rem 0;
+    border-bottom: 1px solid var(--borda);
+    font-size: .89rem;
+    color: var(--texto-2);
+}
+.detalhe-linha:last-child { border-bottom: none; }
+.detalhe-linha b { color: var(--texto); font-weight: 700; }
+
+/* ==========================================================================
+   Avisos
+   ========================================================================== */
+
+.aviso {
+    padding: .75rem 1rem;
+    border-radius: var(--raio);
+    margin-bottom: 1rem;
+    font-size: .89rem;
+    font-weight: 600;
+}
+.aviso-erro { background: var(--erro-suave); color: var(--erro); border: 1px solid #f3c9c9; }
+.aviso-ok { background: var(--sucesso-suave); color: var(--sucesso); border: 1px solid #bfe6cd; }
+
+/* ==========================================================================
+   Prévia da imagem
+   ========================================================================== */
+
+.previa {
+    margin-top: .6rem;
+    border: 1px solid var(--borda);
+    border-radius: var(--raio);
+    padding: .7rem;
+    background: var(--superficie-2);
+    display: flex;
+    align-items: center;
+    gap: .8rem;
+    min-height: 84px;
+}
+.previa img {
+    width: 108px; height: 68px;
+    object-fit: contain;
+    border-radius: .35rem;
+    background: #fff;
+    border: 1px solid var(--borda);
+    display: none;
+}
+.previa img.visivel { display: block; }
+.previa span { font-size: .8rem; color: var(--texto-2); }
+.previa span.erro { color: var(--erro); }
+
+/* ==========================================================================
+   Bloqueio de acesso e paginação
+   ========================================================================== */
+
+.bloqueio {
+    max-width: 520px;
+    margin: 3.5rem auto;
+    text-align: center;
+}
+.bloqueio h2 { margin-top: 0; }
+.bloqueio code {
+    background: var(--superficie-2);
+    border: 1px solid var(--borda);
+    padding: .12rem .4rem;
+    border-radius: .3rem;
+    font-family: ui-monospace, Consolas, monospace;
+    font-size: .86rem;
+}
+
+.paginacao {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 1rem;
+    margin-top: .9rem;
+    flex-wrap: wrap;
+    font-size: .87rem;
+}
+
+@media (max-width: 700px) {
+    .form-grid { grid-template-columns: 1fr; }
+}

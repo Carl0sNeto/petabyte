@@ -4,155 +4,19 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Petabyte | Painel administrativo</title>
-    <style>
-        :root {
-            --primary: #2563eb;
-            --secondary: #111827;
-            --bg: #f8fafc;
-            --card: #ffffff;
-            --text: #0f172a;
-            --border: #e2e8f0;
-            --muted: #64748b;
-            --danger: #b91c1c;
-            --danger-bg: #fef2f2;
-            --ok: #15803d;
-            --ok-bg: #f0fdf4;
-            --warn: #a16207;
-            --warn-bg: #fefce8;
-        }
-
-        * { box-sizing: border-box; }
-        body {
-            margin: 0;
-            font-family: Arial, Helvetica, sans-serif;
-            background: var(--bg);
-            color: var(--text);
-        }
-
-        .container { width: min(1200px, calc(100% - 2rem)); margin: 0 auto; }
-        header { background: linear-gradient(135deg, var(--secondary), #1e293b); color: white; padding: 1rem 0; }
-        .topbar { display: flex; justify-content: space-between; align-items: center; gap: 1rem; flex-wrap: wrap; }
-        .brand { font-size: 1.3rem; font-weight: 700; }
-        .brand span { font-weight: 400; opacity: .7; font-size: .95rem; margin-left: .4rem; }
-        .topbar-actions { display: flex; align-items: center; gap: .7rem; flex-wrap: wrap; }
-        .whoami { font-size: .85rem; opacity: .85; }
-
-        .btn { padding: 0.65rem 1rem; border-radius: 999px; border: none; font-weight: 700; cursor: pointer; font-size: .9rem; font-family: inherit; }
-        .btn-primary { background: var(--primary); color: white; }
-        .btn-secondary { background: white; color: var(--secondary); border: 1px solid var(--border); }
-        .btn-danger { background: var(--danger-bg); color: var(--danger); border: 1px solid #fecaca; }
-        .btn-sm { padding: .38rem .7rem; font-size: .8rem; }
-        .btn:disabled { opacity: .5; cursor: not-allowed; }
-        .btn:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-visible {
-            outline: 2px solid var(--primary); outline-offset: 2px;
-        }
-
-        main { padding: 1.6rem 0 3rem; }
-        .card { background: var(--card); border: 1px solid var(--border); border-radius: 1rem; padding: 1.2rem; box-shadow: 0 10px 25px rgba(15, 23, 42, 0.05); }
-        .muted { color: var(--muted); }
-        .empty-state { padding: 1rem; border: 1px dashed var(--border); border-radius: .8rem; color: var(--muted); background: #f8fafc; }
-
-        .tabs { display: flex; gap: .4rem; margin-bottom: 1.1rem; border-bottom: 1px solid var(--border); }
-        .tab {
-            padding: .7rem 1.1rem; border: none; background: none; cursor: pointer;
-            font-weight: 700; color: var(--muted); font-size: .95rem; font-family: inherit;
-            border-bottom: 3px solid transparent; margin-bottom: -1px;
-        }
-        .tab.active { color: var(--primary); border-bottom-color: var(--primary); }
-
-        .hidden { display: none !important; }
-
-        .section-head { display: flex; justify-content: space-between; align-items: center; gap: 1rem; flex-wrap: wrap; margin-bottom: 1rem; }
-        .section-head h2 { margin: 0; font-size: 1.15rem; }
-
-        .table-wrap { overflow-x: auto; border: 1px solid var(--border); border-radius: .8rem; }
-        table { border-collapse: collapse; width: 100%; font-size: .9rem; }
-        th, td { text-align: left; padding: .7rem .85rem; border-bottom: 1px solid var(--border); vertical-align: middle; }
-        th { background: #f1f5f9; font-size: .78rem; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); white-space: nowrap; }
-        tbody tr:last-child td { border-bottom: none; }
-        tbody tr:hover { background: #f8fafc; }
-        .num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
-        .acoes { display: flex; gap: .35rem; justify-content: flex-end; }
-
-        .pill { display: inline-block; padding: .18rem .55rem; border-radius: 999px; font-size: .74rem; font-weight: 700; white-space: nowrap; }
-        .pill-ok { background: var(--ok-bg); color: var(--ok); }
-        .pill-off { background: #f1f5f9; color: var(--muted); }
-        .pill-warn { background: var(--warn-bg); color: var(--warn); }
-        .pill-danger { background: var(--danger-bg); color: var(--danger); }
-
-        .filtros { display: flex; gap: .6rem; align-items: center; flex-wrap: wrap; }
-        label { display: block; font-size: .8rem; font-weight: 700; color: var(--muted); margin-bottom: .25rem; }
-        input, select, textarea {
-            width: 100%; padding: .6rem .7rem; border: 1px solid var(--border);
-            border-radius: .55rem; font-size: .9rem; font-family: inherit; background: white; color: var(--text);
-        }
-        textarea { resize: vertical; min-height: 70px; }
-
-        .form-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: .9rem; }
-        .form-grid .full { grid-column: 1 / -1; }
-
-        dialog {
-            border: none; border-radius: 1rem; padding: 0; width: min(620px, calc(100% - 2rem));
-            box-shadow: 0 25px 60px rgba(15, 23, 42, .25); color: var(--text); background: var(--card);
-        }
-        dialog::backdrop { background: rgba(15, 23, 42, .5); }
-        .dialog-head { padding: 1.1rem 1.3rem; border-bottom: 1px solid var(--border); font-weight: 700; font-size: 1.05rem; }
-        .dialog-body { padding: 1.3rem; }
-        .dialog-foot { padding: 1rem 1.3rem; border-top: 1px solid var(--border); display: flex; justify-content: flex-end; gap: .6rem; }
-
-        .aviso { padding: .8rem 1rem; border-radius: .6rem; margin-bottom: 1rem; font-size: .9rem; }
-        .aviso-erro { background: var(--danger-bg); color: var(--danger); border: 1px solid #fecaca; }
-        .aviso-ok { background: var(--ok-bg); color: var(--ok); border: 1px solid #bbf7d0; }
-
-        .bloqueio { max-width: 520px; margin: 3rem auto; text-align: center; }
-        .bloqueio h2 { margin-top: 0; }
-        .bloqueio code { background: #f1f5f9; padding: .15rem .4rem; border-radius: .3rem; font-size: .88rem; }
-
-        .paginacao { display: flex; justify-content: space-between; align-items: center; gap: 1rem; margin-top: .9rem; flex-wrap: wrap; }
-
-        /* Miniatura na tabela do catálogo */
-        .thumb {
-            width: 46px; height: 46px; object-fit: cover;
-            border-radius: .4rem; border: 1px solid var(--border); background: #f1f5f9;
-            display: block;
-        }
-        .thumb-vazia {
-            width: 46px; height: 46px; border-radius: .4rem; border: 1px dashed var(--border);
-            background: #f8fafc; display: flex; align-items: center; justify-content: center;
-            font-size: .62rem; color: var(--muted); text-align: center; line-height: 1.1;
-        }
-
-        /* Prévia dentro do modal */
-        .previa {
-            margin-top: .6rem; border: 1px solid var(--border); border-radius: .55rem;
-            padding: .7rem; background: #f8fafc; display: flex; align-items: center; gap: .8rem; min-height: 84px;
-        }
-        .previa img {
-            width: 108px; height: 68px; object-fit: contain; border-radius: .35rem;
-            background: white; border: 1px solid var(--border); display: none;
-        }
-        .previa img.visivel { display: block; }
-        .previa span { font-size: .8rem; }
-        .previa span.erro { color: var(--danger); }
-
-        .detalhe-linha { display: flex; justify-content: space-between; gap: 1rem; padding: .45rem 0; border-bottom: 1px solid var(--border); font-size: .9rem; }
-        .detalhe-linha:last-child { border-bottom: none; }
-        .detalhe-linha b { font-weight: 700; }
-
-        @media (max-width: 700px) {
-            .form-grid { grid-template-columns: 1fr; }
-        }
-    </style>
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='7' fill='%23081221'/><text x='16' y='23' font-family='sans-serif' font-size='20' font-weight='700' fill='%2322d3ee' text-anchor='middle'>P</text></svg>">
+    <link rel="stylesheet" href="estilos.css">
+    <link rel="stylesheet" href="admin.css">
 </head>
 <body data-page="admin">
-    <header>
-        <div class="container topbar">
-            <div class="brand">Petabyte <span>painel administrativo</span></div>
-            <div class="topbar-actions">
+    <header class="topo">
+        <div class="container topo-barra">
+            <a class="marca" href="admin.html">Peta<em>byte</em> <span>Painel</span></a>
+            <nav class="topo-nav">
                 <span class="whoami" id="whoami"></span>
-                <a class="btn btn-secondary btn-sm" href="E-Commerce.html">Ver a loja</a>
-                <button class="btn btn-secondary btn-sm" id="sairBtn" type="button">Sair</button>
-            </div>
+                <a href="E-Commerce.html">Ver a loja</a>
+                <button class="btn btn-fantasma btn-sm" id="sairBtn" type="button">Sair</button>
+            </nav>
         </div>
     </header>
 
@@ -169,14 +33,14 @@
         <div id="painel" class="hidden">
             <div id="aviso" class="aviso hidden" role="status"></div>
 
-            <div class="tabs" role="tablist">
-                <button class="tab active" type="button" data-aba="produtos" role="tab">Produtos</button>
-                <button class="tab" type="button" data-aba="pedidos" role="tab">Pedidos</button>
+            <div class="abas" role="tablist">
+                <button class="aba active" type="button" data-aba="produtos" role="tab">Produtos</button>
+                <button class="aba" type="button" data-aba="pedidos" role="tab">Pedidos</button>
             </div>
 
             <!-- ---------- Produtos ---------- -->
             <section id="abaProdutos" class="card">
-                <div class="section-head">
+                <div class="secao-titulo">
                     <h2>Catálogo</h2>
                     <button class="btn btn-primary btn-sm" type="button" id="novoProdutoBtn">Novo produto</button>
                 </div>
@@ -204,7 +68,7 @@
 
             <!-- ---------- Pedidos ---------- -->
             <section id="abaPedidos" class="card hidden">
-                <div class="section-head">
+                <div class="secao-titulo">
                     <h2>Pedidos</h2>
                     <div class="filtros">
                         <select id="filtroStatus" aria-label="Filtrar por status">
