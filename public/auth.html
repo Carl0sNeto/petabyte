@@ -3,78 +3,64 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Petabyte | Login</title>
-    <style>
-        :root {
-            --primary: #2563eb;
-            --secondary: #111827;
-            --bg: #f8fafc;
-            --card: #ffffff;
-            --text: #0f172a;
-            --border: #e2e8f0;
-        }
-
-        * { box-sizing: border-box; }
-        body {
-            margin: 0;
-            font-family: Arial, Helvetica, sans-serif;
-            background: var(--bg);
-            color: var(--text);
-            min-height: 100vh;
-            display: grid;
-            place-items: center;
-        }
-
-        .container {
-            width: min(460px, calc(100% - 2rem));
-            background: var(--card);
-            border: 1px solid var(--border);
-            border-radius: 1rem;
-            padding: 1.5rem;
-            box-shadow: 0 10px 25px rgba(15, 23, 42, 0.08);
-        }
-
-        h1 { margin-top: 0; }
-        .tabs { display: flex; gap: 0.5rem; margin-bottom: 1rem; }
-        .tab { flex: 1; padding: 0.7rem; border: 1px solid var(--border); background: white; border-radius: 999px; cursor: pointer; }
-        .tab.active { background: var(--primary); color: white; border-color: var(--primary); }
-        form { display: flex; flex-direction: column; gap: 0.8rem; }
-        input { padding: 0.8rem 1rem; border: 1px solid var(--border); border-radius: 0.75rem; }
-        .btn { padding: 0.8rem 1rem; border: none; border-radius: 999px; font-weight: 700; cursor: pointer; background: var(--primary); color: white; }
-        .muted { color: #64748b; font-size: 0.95rem; }
-        .hidden { display: none; }
-    </style>
+    <title>Petabyte | Entrar ou criar conta</title>
+    <link rel="stylesheet" href="estilos.css">
 </head>
-<body>
-    <div class="container">
-        <h1>Entrar ou criar conta</h1>
-        <div class="tabs">
-            <button class="tab active" data-target="login">Login</button>
-            <button class="tab" data-target="register">Cadastro</button>
+<body class="pagina-conta">
+    <main class="caixa-conta">
+        <a class="marca" href="E-Commerce.html">Peta<em>byte</em></a>
+        <h1>Acesse sua conta</h1>
+
+        <div class="abas" role="tablist">
+            <button class="aba active" type="button" data-target="login" role="tab">Entrar</button>
+            <button class="aba" type="button" data-target="register" role="tab">Criar conta</button>
         </div>
 
-        <form id="loginForm">
-            <input id="loginEmail" type="email" placeholder="E-mail" required>
-            <input id="loginSenha" type="password" placeholder="Senha" required>
-            <button class="btn" type="submit">Entrar</button>
+        <form id="loginForm" class="empilhado">
+            <div>
+                <label for="loginEmail">E-mail</label>
+                <input id="loginEmail" type="email" placeholder="voce@exemplo.com" autocomplete="email" required>
+            </div>
+            <div>
+                <label for="loginSenha">Senha</label>
+                <input id="loginSenha" type="password" placeholder="Sua senha" autocomplete="current-password" required>
+            </div>
+            <button class="btn btn-primary btn-bloco" type="submit">Entrar</button>
         </form>
 
-        <form id="registerForm" class="hidden">
-            <input id="registerNome" type="text" placeholder="Nome" required>
-            <input id="registerEmail" type="email" placeholder="E-mail" required>
-            <input id="registerSenha" type="password" placeholder="Senha" required>
-            <input id="confirmarSenha" type="password" placeholder="Confirmar senha" required>
-            <button class="btn" type="submit">Criar conta</button>
+        <form id="registerForm" class="empilhado hidden">
+            <div>
+                <label for="registerNome">Nome completo</label>
+                <input id="registerNome" type="text" placeholder="Como devemos te chamar" autocomplete="name" required>
+            </div>
+            <div>
+                <label for="registerEmail">E-mail</label>
+                <input id="registerEmail" type="email" placeholder="voce@exemplo.com" autocomplete="email" required>
+            </div>
+            <div>
+                <label for="registerSenha">Senha</label>
+                <input id="registerSenha" type="password" placeholder="Crie uma senha" autocomplete="new-password" required>
+            </div>
+            <div>
+                <label for="confirmarSenha">Confirmar senha</label>
+                <input id="confirmarSenha" type="password" placeholder="Repita a senha" autocomplete="new-password" required>
+            </div>
+            <button class="btn btn-primary btn-bloco" type="submit">Criar conta</button>
         </form>
 
-        <form id="recoverForm" class="hidden">
-            <input id="recoverEmail" type="email" placeholder="E-mail cadastrado" required>
-            <button class="btn" type="submit">Enviar link</button>
+        <form id="recoverForm" class="empilhado hidden">
+            <div>
+                <label for="recoverEmail">E-mail cadastrado</label>
+                <input id="recoverEmail" type="email" placeholder="voce@exemplo.com" autocomplete="email" required>
+            </div>
+            <button class="btn btn-primary btn-bloco" type="submit">Enviar link de recuperação</button>
         </form>
 
-        <p class="muted"><a href="#" id="toggleRecover">Esqueci minha senha</a></p>
-        <p class="muted"><a href="E-Commerce.html">Voltar para a loja</a></p>
-    </div>
+        <div class="rodape-conta">
+            <p><a href="#" id="toggleRecover">Esqueci minha senha</a></p>
+            <p><a href="E-Commerce.html">Voltar para a loja</a></p>
+        </div>
+    </main>
 
     <script src="script.js"></script>
 </body>

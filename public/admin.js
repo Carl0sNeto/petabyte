@@ -103,7 +103,8 @@ function bloquear(titulo, texto, mostrarLogin) {
 // Produtos
 // --------------------------------------------------------------------------
 
-let categorias = ['tecnologia', 'acessorios', 'casa'];
+// Substituído pela lista real assim que GET /admin/produtos responde.
+let categorias = [];
 
 async function carregarProdutos() {
     const corpo = document.getElementById('listaProdutos');
@@ -135,7 +136,7 @@ async function carregarProdutos() {
                     <td class="muted">${produto.id}</td>
                     <td>${foto}</td>
                     <td><strong>${escapeHtml(produto.nome)}</strong></td>
-                    <td class="muted">${escapeHtml(produto.categoria)}</td>
+                    <td class="muted">${escapeHtml(rotuloCategoria(produto.categoria))}</td>
                     <td class="num">${formatarMoeda(produto.preco)}</td>
                     <td class="num">${estoquePill}</td>
                     <td class="num muted">${produto.vendidos}</td>
@@ -172,11 +173,17 @@ function ligarFallbackDasMiniaturas(container) {
     });
 }
 
+// A API devolve { slug, rotulo }: o slug vai para o banco, o rótulo para a tela.
 function preencherCategorias(selecionada) {
     const campo = document.getElementById('campoCategoria');
     campo.innerHTML = categorias
-        .map((c) => `<option value="${escapeHtml(c)}"${c === selecionada ? ' selected' : ''}>${escapeHtml(c)}</option>`)
+        .map((c) => `<option value="${escapeHtml(c.slug)}"${c.slug === selecionada ? ' selected' : ''}>${escapeHtml(c.rotulo)}</option>`)
         .join('');
+}
+
+function rotuloCategoria(slug) {
+    const encontrada = categorias.find((c) => c.slug === slug);
+    return encontrada ? encontrada.rotulo : slug;
 }
 
 let produtoEmEdicao = null;
@@ -242,7 +249,8 @@ function abrirDialogProduto(produto) {
     document.getElementById('campoImagem').value = produto ? produto.imagemUrl : '';
     document.getElementById('campoDescricao').value = produto ? produto.descricao : '';
     document.getElementById('campoAtivo').value = produto ? String(produto.ativo) : 'true';
-    preencherCategorias(produto ? produto.categoria : categorias[0]);
+    document.getElementById('campoTags').value = produto && produto.tags ? produto.tags.join(', ') : '';
+    preencherCategorias(produto ? produto.categoria : (categorias[0] && categorias[0].slug));
     atualizarPrevia();
 
     document.getElementById('dialogProduto').showModal();
@@ -261,7 +269,9 @@ async function salvarProduto(evento) {
         categoria: document.getElementById('campoCategoria').value,
         imagemUrl: document.getElementById('campoImagem').value,
         descricao: document.getElementById('campoDescricao').value,
-        ativo: document.getElementById('campoAtivo').value === 'true'
+        ativo: document.getElementById('campoAtivo').value === 'true',
+        // O servidor aceita string separada por vírgula e normaliza.
+        tags: document.getElementById('campoTags').value
     };
 
     botao.disabled = true;

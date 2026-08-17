@@ -1,0 +1,749 @@
+/* ==========================================================================
+   Petabyte — folha de estilos compartilhada
+   --------------------------------------------------------------------------
+   Antes, cada página trazia seu próprio bloco <style>, e o visual foi
+   divergindo entre elas. Tudo passa por aqui.
+
+   Direção: varejo de eletrônicos. Base marinho profunda, azul para ações,
+   laranja reservado exclusivamente para preço e oferta — a cor que o olho
+   procura primeiro numa loja de tecnologia.
+   ========================================================================== */
+
+:root {
+    /* Base institucional */
+    --marca-900: #081221;
+    --marca-800: #0e1e34;
+    --marca-700: #16304f;
+    --marca-600: #1e4272;
+
+    /* Ações */
+    --acao: #1d4ed8;
+    --acao-escura: #1739a8;
+    --acao-suave: #e8effd;
+
+    /* Preço e oferta. Usar só aqui, para não perder o destaque. */
+    --preco: #d1490b;
+    --preco-suave: #fff1e8;
+
+    /* Sinalização */
+    --sucesso: #15803d;
+    --sucesso-suave: #eaf7ee;
+    --alerta: #a35a06;
+    --alerta-suave: #fdf3e3;
+    --erro: #b91c1c;
+    --erro-suave: #fdefef;
+
+    /* Neutros com leve viés azul, para conversar com a base marinho */
+    --fundo: #f2f5f9;
+    --superficie: #ffffff;
+    --superficie-2: #f7f9fc;
+    --texto: #0d1725;
+    --texto-2: #48576b;
+    --texto-3: #8695a8;
+    --borda: #e0e6ee;
+    --borda-forte: #ccd5e0;
+
+    --sombra-1: 0 1px 2px rgba(13, 23, 37, .06);
+    --sombra-2: 0 4px 14px rgba(13, 23, 37, .08);
+    --sombra-3: 0 18px 40px rgba(13, 23, 37, .14);
+
+    --raio: .6rem;
+    --raio-g: 1rem;
+
+    --largura: 1200px;
+
+    --fonte: "Segoe UI", system-ui, -apple-system, Roboto, "Helvetica Neue", Arial, sans-serif;
+    --fonte-num: "Segoe UI", system-ui, sans-serif;
+}
+
+* { box-sizing: border-box; }
+
+html { scroll-behavior: smooth; }
+
+body {
+    margin: 0;
+    font-family: var(--fonte);
+    background: var(--fundo);
+    color: var(--texto);
+    line-height: 1.6;
+    -webkit-font-smoothing: antialiased;
+}
+
+img { max-width: 100%; display: block; }
+
+a { color: var(--acao); text-decoration: none; }
+a:hover { text-decoration: underline; }
+
+h1, h2, h3, h4 { line-height: 1.2; margin: 0 0 .5rem; letter-spacing: -.02em; text-wrap: balance; }
+h1 { font-size: clamp(1.85rem, 3.6vw, 2.6rem); font-weight: 800; }
+h2 { font-size: clamp(1.3rem, 2.4vw, 1.7rem); font-weight: 750; }
+h3 { font-size: 1.08rem; font-weight: 700; }
+p { margin: 0 0 1rem; }
+
+:focus-visible {
+    outline: 3px solid var(--acao);
+    outline-offset: 2px;
+    border-radius: 3px;
+}
+
+.container { width: min(var(--largura), calc(100% - 2.5rem)); margin: 0 auto; }
+.muted { color: var(--texto-2); }
+.hidden { display: none !important; }
+.num { font-variant-numeric: tabular-nums; }
+
+/* ==========================================================================
+   Cabeçalho
+   ========================================================================== */
+
+.topo {
+    position: sticky;
+    top: 0;
+    z-index: 50;
+    background: var(--marca-900);
+    color: #fff;
+    box-shadow: var(--sombra-2);
+}
+
+/* Fio fino em degradê: detalhe de "tecnologia" sem custar peso visual. */
+.topo::after {
+    content: "";
+    display: block;
+    height: 2px;
+    background: linear-gradient(90deg, var(--acao), #22d3ee 55%, var(--preco));
+}
+
+.topo-barra {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 1.5rem;
+    padding: .85rem 0;
+    flex-wrap: wrap;
+}
+
+.marca {
+    display: inline-flex;
+    align-items: baseline;
+    gap: .1rem;
+    font-size: 1.45rem;
+    font-weight: 800;
+    letter-spacing: -.03em;
+    color: #fff;
+}
+.marca:hover { text-decoration: none; }
+.marca em { font-style: normal; color: #22d3ee; }
+.marca span {
+    font-size: .7rem;
+    font-weight: 600;
+    letter-spacing: .12em;
+    text-transform: uppercase;
+    color: #7f9bc4;
+    margin-left: .5rem;
+    align-self: center;
+}
+
+.topo-nav { display: flex; align-items: center; gap: .35rem; flex-wrap: wrap; }
+.topo-nav a {
+    color: #c8d6ea;
+    padding: .45rem .7rem;
+    border-radius: var(--raio);
+    font-size: .93rem;
+    font-weight: 600;
+}
+.topo-nav a:hover { background: rgba(255, 255, 255, .09); color: #fff; text-decoration: none; }
+
+.link-carrinho {
+    display: inline-flex;
+    align-items: center;
+    gap: .5rem;
+    background: rgba(255, 255, 255, .1);
+    border: 1px solid rgba(255, 255, 255, .16);
+    color: #fff !important;
+}
+.contador-carrinho {
+    min-width: 1.45rem;
+    height: 1.45rem;
+    padding: 0 .35rem;
+    border-radius: 999px;
+    background: var(--preco);
+    color: #fff;
+    font-size: .78rem;
+    font-weight: 800;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+}
+
+/* Barra de confiança: frete, parcelamento, garantia. Convenção do varejo de
+   eletrônicos, e responde as dúvidas de compra antes que elas apareçam. */
+.barra-confianca {
+    background: var(--marca-800);
+    border-top: 1px solid rgba(255, 255, 255, .07);
+}
+.barra-confianca ul {
+    list-style: none;
+    margin: 0;
+    padding: .6rem 0;
+    display: flex;
+    gap: 2rem;
+    flex-wrap: wrap;
+    justify-content: center;
+}
+.barra-confianca li {
+    color: #b9c9de;
+    font-size: .84rem;
+    font-weight: 600;
+    display: flex;
+    align-items: center;
+    gap: .45rem;
+}
+.barra-confianca b { color: #fff; font-weight: 700; }
+
+/* ==========================================================================
+   Botões
+   ========================================================================== */
+
+.btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: .5rem;
+    padding: .72rem 1.25rem;
+    border-radius: var(--raio);
+    border: 1px solid transparent;
+    font-family: inherit;
+    font-size: .94rem;
+    font-weight: 700;
+    cursor: pointer;
+    transition: background-color .15s ease, border-color .15s ease, transform .05s ease;
+    text-align: center;
+}
+.btn:hover { text-decoration: none; }
+.btn:active { transform: translateY(1px); }
+.btn:disabled { opacity: .55; cursor: not-allowed; transform: none; }
+
+.btn-primary { background: var(--acao); color: #fff; }
+.btn-primary:hover { background: var(--acao-escura); }
+
+.btn-secondary { background: var(--superficie); color: var(--texto); border-color: var(--borda-forte); }
+.btn-secondary:hover { background: var(--superficie-2); border-color: var(--texto-3); }
+
+.btn-comprar { background: var(--preco); color: #fff; width: 100%; }
+.btn-comprar:hover { background: #b03d07; }
+
+.btn-fantasma { background: transparent; color: #fff; border-color: rgba(255, 255, 255, .35); }
+.btn-fantasma:hover { background: rgba(255, 255, 255, .12); }
+
+.btn-bloco { width: 100%; }
+.btn-sm { padding: .45rem .8rem; font-size: .84rem; }
+
+/* ==========================================================================
+   Hero
+   ========================================================================== */
+
+.hero {
+    background:
+        radial-gradient(900px 380px at 88% -10%, rgba(34, 211, 238, .17), transparent 60%),
+        linear-gradient(160deg, var(--marca-800), var(--marca-900) 70%);
+    color: #fff;
+    padding: 3rem 0 3.4rem;
+}
+.hero-grade {
+    display: grid;
+    grid-template-columns: 1.25fr .75fr;
+    gap: 2.5rem;
+    align-items: center;
+}
+.hero .selo {
+    display: inline-flex;
+    align-items: center;
+    gap: .45rem;
+    background: rgba(34, 211, 238, .14);
+    border: 1px solid rgba(34, 211, 238, .3);
+    color: #67e8f9;
+    padding: .3rem .8rem;
+    border-radius: 999px;
+    font-size: .78rem;
+    font-weight: 700;
+    letter-spacing: .04em;
+    text-transform: uppercase;
+    margin-bottom: 1rem;
+}
+.hero h1 { color: #fff; margin-bottom: .8rem; }
+.hero h1 em { font-style: normal; color: #67e8f9; }
+.hero p { color: #b9c9de; font-size: 1.05rem; max-width: 46ch; }
+.hero .acoes { display: flex; gap: .8rem; flex-wrap: wrap; margin-top: 1.6rem; }
+
+.hero-destaque {
+    background: rgba(255, 255, 255, .06);
+    border: 1px solid rgba(255, 255, 255, .13);
+    border-radius: var(--raio-g);
+    padding: 1.5rem;
+    backdrop-filter: blur(4px);
+}
+.hero-destaque h3 { color: #fff; margin-bottom: .9rem; }
+.hero-destaque dl { margin: 0; display: grid; gap: .9rem; }
+.hero-destaque .item { display: flex; gap: .8rem; align-items: flex-start; }
+.hero-destaque dt { font-weight: 700; color: #fff; font-size: .92rem; }
+.hero-destaque dd { margin: 0; color: #9fb3cd; font-size: .85rem; line-height: 1.45; }
+.hero-destaque .icone {
+    flex-shrink: 0;
+    width: 2.1rem; height: 2.1rem;
+    border-radius: .5rem;
+    background: rgba(34, 211, 238, .15);
+    display: flex; align-items: center; justify-content: center;
+    font-size: 1rem;
+}
+
+.banner-boas-vindas {
+    background: rgba(34, 211, 238, .12);
+    border: 1px solid rgba(34, 211, 238, .28);
+    color: #a5f3fc;
+    padding: .6rem 1rem;
+    border-radius: var(--raio);
+    font-size: .9rem;
+    font-weight: 600;
+    margin-bottom: 1rem;
+    display: inline-block;
+}
+
+/* ==========================================================================
+   Seções
+   ========================================================================== */
+
+main { padding: 2.5rem 0 3.5rem; }
+.secao { margin-bottom: 3rem; }
+
+.secao-titulo {
+    display: flex;
+    align-items: flex-end;
+    justify-content: space-between;
+    gap: 1rem;
+    flex-wrap: wrap;
+    margin-bottom: 1.4rem;
+    padding-bottom: .8rem;
+    border-bottom: 2px solid var(--borda);
+}
+.secao-titulo h2 { margin: 0; }
+.secao-titulo .apoio { color: var(--texto-2); font-size: .92rem; }
+
+/* ==========================================================================
+   Cartão de produto
+   ========================================================================== */
+
+.grade-produtos {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(230px, 1fr));
+    gap: 1.1rem;
+}
+
+.produto {
+    background: var(--superficie);
+    border: 1px solid var(--borda);
+    border-radius: var(--raio-g);
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+    transition: box-shadow .18s ease, border-color .18s ease, transform .18s ease;
+}
+.produto:hover {
+    box-shadow: var(--sombra-3);
+    border-color: var(--borda-forte);
+    transform: translateY(-3px);
+}
+
+/* Proporção fixa e `contain` sobre branco: fotos de eletrônicos vêm de
+   fornecedores diferentes, com enquadramento e fundo imprevisíveis. */
+.produto-foto {
+    position: relative;
+    aspect-ratio: 4 / 3;
+    background: #fff;
+    border-bottom: 1px solid var(--borda);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: .9rem;
+}
+.produto-foto img { width: 100%; height: 100%; object-fit: contain; }
+.produto-foto .sem-foto {
+    color: var(--texto-3);
+    font-size: .8rem;
+    font-weight: 600;
+}
+
+.produto-chip {
+    position: absolute;
+    top: .65rem;
+    left: .65rem;
+    background: rgba(13, 23, 37, .82);
+    color: #fff;
+    padding: .18rem .55rem;
+    border-radius: 999px;
+    font-size: .68rem;
+    font-weight: 700;
+    letter-spacing: .05em;
+    text-transform: uppercase;
+}
+
+.produto-corpo {
+    padding: .95rem 1rem 1.1rem;
+    display: flex;
+    flex-direction: column;
+    gap: .55rem;
+    flex: 1;
+}
+
+.produto-nome {
+    font-size: .95rem;
+    font-weight: 700;
+    line-height: 1.35;
+    margin: 0;
+    color: var(--texto);
+    /* Duas linhas fixas mantêm os cartões alinhados mesmo com nomes longos. */
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+    min-height: 2.6em;
+}
+
+.produto-desc {
+    font-size: .82rem;
+    color: var(--texto-2);
+    margin: 0;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+}
+
+.produto-preco { margin-top: auto; padding-top: .3rem; }
+.produto-preco .valor {
+    font-size: 1.42rem;
+    font-weight: 800;
+    color: var(--preco);
+    letter-spacing: -.025em;
+    font-variant-numeric: tabular-nums;
+    display: block;
+    line-height: 1.15;
+}
+.produto-preco .parcelas {
+    font-size: .78rem;
+    color: var(--texto-2);
+    font-variant-numeric: tabular-nums;
+}
+
+.estoque {
+    display: inline-flex;
+    align-items: center;
+    gap: .35rem;
+    font-size: .76rem;
+    font-weight: 700;
+}
+.estoque::before { content: ""; width: .45rem; height: .45rem; border-radius: 50%; background: currentColor; }
+.estoque-ok { color: var(--sucesso); }
+.estoque-baixo { color: var(--alerta); }
+.estoque-fora { color: var(--texto-3); }
+
+/* ==========================================================================
+   Filtros por categoria
+   ========================================================================== */
+
+.filtros { display: flex; gap: .55rem; flex-wrap: wrap; margin-bottom: 1.5rem; }
+.filtro-btn {
+    padding: .5rem 1.05rem;
+    border-radius: 999px;
+    border: 1px solid var(--borda-forte);
+    background: var(--superficie);
+    color: var(--texto-2);
+    font-family: inherit;
+    font-size: .89rem;
+    font-weight: 700;
+    cursor: pointer;
+    transition: background-color .15s ease, color .15s ease, border-color .15s ease;
+}
+.filtro-btn:hover { border-color: var(--acao); color: var(--acao); }
+.filtro-btn.active { background: var(--marca-900); border-color: var(--marca-900); color: #fff; }
+
+/* ==========================================================================
+   Cartões genéricos, formulários e tabelas
+   ========================================================================== */
+
+.card {
+    background: var(--superficie);
+    border: 1px solid var(--borda);
+    border-radius: var(--raio-g);
+    padding: 1.5rem;
+    box-shadow: var(--sombra-1);
+}
+
+.grade-2 { display: grid; grid-template-columns: repeat(2, 1fr); gap: 1.2rem; }
+.grade-perfil { display: grid; grid-template-columns: .85fr 1.15fr; gap: 1.2rem; }
+
+label {
+    display: block;
+    font-size: .84rem;
+    font-weight: 700;
+    color: var(--texto-2);
+    margin-bottom: .3rem;
+}
+
+input, select, textarea {
+    width: 100%;
+    padding: .72rem .85rem;
+    border: 1px solid var(--borda-forte);
+    border-radius: var(--raio);
+    font-family: inherit;
+    font-size: .95rem;
+    background: var(--superficie);
+    color: var(--texto);
+    transition: border-color .15s ease, box-shadow .15s ease;
+}
+input:focus, select:focus, textarea:focus {
+    border-color: var(--acao);
+    box-shadow: 0 0 0 3px var(--acao-suave);
+    outline: none;
+}
+input::placeholder { color: var(--texto-3); }
+
+form.empilhado { display: flex; flex-direction: column; gap: .85rem; }
+
+.abas { display: flex; gap: .3rem; border-bottom: 2px solid var(--borda); margin-bottom: 1.5rem; }
+.aba {
+    padding: .75rem 1.15rem;
+    border: none;
+    background: none;
+    font-family: inherit;
+    font-size: .95rem;
+    font-weight: 700;
+    color: var(--texto-2);
+    cursor: pointer;
+    border-bottom: 3px solid transparent;
+    margin-bottom: -2px;
+}
+.aba:hover { color: var(--texto); }
+.aba.active { color: var(--acao); border-bottom-color: var(--acao); }
+
+.estado-vazio {
+    padding: 2rem 1.2rem;
+    border: 1px dashed var(--borda-forte);
+    border-radius: var(--raio);
+    background: var(--superficie-2);
+    color: var(--texto-2);
+    text-align: center;
+}
+
+/* ==========================================================================
+   Carrinho
+   ========================================================================== */
+
+.carrinho-grade { display: grid; grid-template-columns: 1.5fr .85fr; gap: 1.3rem; align-items: start; }
+
+.item-carrinho {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 1rem;
+    padding: 1rem 0;
+    border-bottom: 1px solid var(--borda);
+    flex-wrap: wrap;
+}
+.item-carrinho:last-child { border-bottom: none; }
+.item-carrinho .nome { font-weight: 700; font-size: .96rem; }
+.item-carrinho .unitario { font-size: .82rem; color: var(--texto-2); font-variant-numeric: tabular-nums; }
+
+.acoes-item { display: flex; align-items: center; gap: .7rem; flex-wrap: wrap; }
+.contador {
+    display: inline-flex;
+    align-items: center;
+    border: 1px solid var(--borda-forte);
+    border-radius: var(--raio);
+    overflow: hidden;
+}
+.contador button {
+    width: 2.1rem; height: 2.1rem;
+    border: none;
+    background: var(--superficie-2);
+    font-family: inherit;
+    font-size: 1.05rem;
+    font-weight: 700;
+    color: var(--texto-2);
+    cursor: pointer;
+}
+.contador button:hover { background: var(--borda); color: var(--texto); }
+.contador .qtd {
+    min-width: 2.3rem;
+    text-align: center;
+    font-weight: 700;
+    font-variant-numeric: tabular-nums;
+}
+.item-total { font-weight: 800; font-variant-numeric: tabular-nums; min-width: 6rem; text-align: right; }
+.btn-remover {
+    background: none;
+    border: none;
+    color: var(--erro);
+    font-family: inherit;
+    font-size: .84rem;
+    font-weight: 700;
+    cursor: pointer;
+    padding: .3rem;
+}
+.btn-remover:hover { text-decoration: underline; }
+
+.resumo { position: sticky; top: 5.5rem; }
+.resumo-linha {
+    display: flex;
+    justify-content: space-between;
+    padding: .55rem 0;
+    font-size: .94rem;
+    color: var(--texto-2);
+}
+.resumo-linha strong { color: var(--texto); font-variant-numeric: tabular-nums; }
+.resumo-total {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    padding: .9rem 0 .3rem;
+    margin-top: .5rem;
+    border-top: 2px solid var(--borda);
+}
+.resumo-total span { font-weight: 700; }
+.resumo-total strong {
+    font-size: 1.6rem;
+    font-weight: 800;
+    color: var(--preco);
+    font-variant-numeric: tabular-nums;
+    letter-spacing: -.025em;
+}
+.frete-gratis {
+    background: var(--sucesso-suave);
+    color: var(--sucesso);
+    padding: .55rem .8rem;
+    border-radius: var(--raio);
+    font-size: .84rem;
+    font-weight: 700;
+    margin: .6rem 0;
+}
+
+/* ==========================================================================
+   Newsletter
+   ========================================================================== */
+
+.newsletter {
+    background: linear-gradient(135deg, var(--marca-800), var(--marca-700));
+    color: #fff;
+    border-radius: var(--raio-g);
+    padding: 2.2rem;
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 2rem;
+    align-items: center;
+}
+.newsletter h3 { color: #fff; font-size: 1.35rem; }
+.newsletter p { color: #b9c9de; margin: 0; }
+.newsletter form { display: flex; gap: .6rem; flex-wrap: wrap; }
+.newsletter input { flex: 1 1 11rem; border-color: transparent; }
+
+/* ==========================================================================
+   Página de conta (login, cadastro, redefinição)
+   ========================================================================== */
+
+.pagina-conta {
+    min-height: 100vh;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 2.5rem 1.25rem;
+    background:
+        radial-gradient(800px 400px at 50% -10%, rgba(34, 211, 238, .13), transparent 60%),
+        linear-gradient(160deg, var(--marca-800), var(--marca-900));
+}
+.caixa-conta {
+    width: min(430px, 100%);
+    background: var(--superficie);
+    border-radius: var(--raio-g);
+    padding: 2rem;
+    box-shadow: var(--sombra-3);
+}
+.caixa-conta .marca { color: var(--texto); justify-content: center; display: flex; margin-bottom: .3rem; }
+.caixa-conta .marca em { color: var(--acao); }
+.caixa-conta h1 { font-size: 1.5rem; text-align: center; margin-bottom: 1.4rem; }
+.caixa-conta .rodape-conta {
+    margin-top: 1.3rem;
+    padding-top: 1.1rem;
+    border-top: 1px solid var(--borda);
+    text-align: center;
+    font-size: .88rem;
+}
+.caixa-conta .rodape-conta p { margin: .35rem 0; }
+
+/* ==========================================================================
+   Rodapé
+   ========================================================================== */
+
+.rodape {
+    background: var(--marca-900);
+    color: #93a7c0;
+    padding: 2.8rem 0 1.5rem;
+    margin-top: auto;
+}
+.rodape-grade {
+    display: grid;
+    grid-template-columns: 1.4fr repeat(3, 1fr);
+    gap: 2rem;
+    padding-bottom: 2rem;
+    border-bottom: 1px solid rgba(255, 255, 255, .09);
+}
+.rodape h4 {
+    color: #fff;
+    font-size: .82rem;
+    letter-spacing: .11em;
+    text-transform: uppercase;
+    margin-bottom: .9rem;
+}
+.rodape ul { list-style: none; margin: 0; padding: 0; display: grid; gap: .5rem; }
+.rodape a { color: #93a7c0; font-size: .9rem; }
+.rodape a:hover { color: #fff; }
+.rodape .sobre { font-size: .9rem; line-height: 1.6; max-width: 34ch; }
+.rodape .marca { margin-bottom: .7rem; }
+.rodape-fim {
+    padding-top: 1.3rem;
+    font-size: .84rem;
+    display: flex;
+    justify-content: space-between;
+    gap: 1rem;
+    flex-wrap: wrap;
+}
+
+/* ==========================================================================
+   Responsivo
+   ========================================================================== */
+
+@media (max-width: 940px) {
+    .hero-grade { grid-template-columns: 1fr; gap: 2rem; }
+    .carrinho-grade { grid-template-columns: 1fr; }
+    .resumo { position: static; }
+    .grade-perfil, .grade-2 { grid-template-columns: 1fr; }
+    .newsletter { grid-template-columns: 1fr; padding: 1.6rem; }
+    .rodape-grade { grid-template-columns: 1fr 1fr; gap: 1.6rem; }
+}
+
+@media (max-width: 620px) {
+    .container { width: calc(100% - 1.8rem); }
+    .topo-barra { justify-content: center; gap: .7rem; }
+    .topo-nav { justify-content: center; gap: .2rem; }
+    .topo-nav a { padding: .4rem .55rem; font-size: .87rem; }
+    .barra-confianca ul { gap: 1rem; font-size: .78rem; }
+    .hero { padding: 2.2rem 0 2.5rem; }
+    .grade-produtos { grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: .8rem; }
+    .produto-corpo { padding: .8rem; }
+    .produto-preco .valor { font-size: 1.2rem; }
+    .rodape-grade { grid-template-columns: 1fr; }
+    .item-carrinho { justify-content: space-between; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    html { scroll-behavior: auto; }
+    * { transition: none !important; animation: none !important; }
+    .produto:hover { transform: none; }
+}

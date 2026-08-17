@@ -81,6 +81,7 @@ function escapeHtml(valor) {
 }
 
 let catalogoCache = null;
+let categoriasCache = [];
 
 async function carregarCatalogo() {
     if (catalogoCache) {
@@ -95,6 +96,7 @@ async function carregarCatalogo() {
     }
 
     catalogoCache = Array.isArray(data.produtos) ? data.produtos : [];
+    categoriasCache = Array.isArray(data.categorias) ? data.categorias : [];
     return catalogoCache;
 }
 
@@ -358,17 +360,19 @@ async function renderCartPage() {
     const resumo = createCartSummary(itens);
 
     cartItems.innerHTML = itens.map((item) => `
-        <div class="cart-item">
+        <div class="item-carrinho">
             <div>
-                <strong>${escapeHtml(item.produto.nome)}</strong>
-                <div>${formatCurrency(item.produto.preco)} cada</div>
+                <div class="nome">${escapeHtml(item.produto.nome)}</div>
+                <div class="unitario">${formatCurrency(item.produto.preco)} cada</div>
             </div>
-            <div class="cart-actions">
-                <button class="btn btn-secondary quantity-btn" data-id="${item.id}" data-delta="-1">-</button>
-                <span>${item.quantidade}</span>
-                <button class="btn btn-secondary quantity-btn" data-id="${item.id}" data-delta="1">+</button>
-                <span>${formatCurrency(item.produto.preco * item.quantidade)}</span>
-                <button class="btn btn-secondary remove-item" data-id="${item.id}">Apagar</button>
+            <div class="acoes-item">
+                <div class="contador">
+                    <button type="button" class="quantity-btn" data-id="${item.id}" data-delta="-1" aria-label="Diminuir quantidade">−</button>
+                    <span class="qtd">${item.quantidade}</span>
+                    <button type="button" class="quantity-btn" data-id="${item.id}" data-delta="1" aria-label="Aumentar quantidade">+</button>
+                </div>
+                <span class="item-total">${formatCurrency(item.produto.preco * item.quantidade)}</span>
+                <button type="button" class="btn-remover remove-item" data-id="${item.id}">Remover</button>
             </div>
         </div>
     `).join('');
@@ -376,6 +380,59 @@ async function renderCartPage() {
     cartTotal.textContent = formatCurrency(resumo.subtotal);
     shippingValue.textContent = formatCurrency(resumo.shipping);
     finalTotal.textContent = formatCurrency(resumo.total);
+
+    // Faltando pouco para o frete grátis, vale avisar.
+    const avisoFrete = document.getElementById('avisoFrete');
+    if (avisoFrete) {
+        const faltam = 199 - resumo.subtotal;
+        if (resumo.shipping === 0) {
+            avisoFrete.textContent = '🚚 Você ganhou frete grátis neste pedido!';
+            avisoFrete.classList.remove('hidden');
+        } else if (faltam > 0) {
+            avisoFrete.textContent = `Faltam ${formatCurrency(faltam)} para o frete grátis.`;
+            avisoFrete.classList.remove('hidden');
+        } else {
+            avisoFrete.classList.add('hidden');
+        }
+    }
+}
+
+// O banco guarda o slug ("perifericos"); quem aparece na tela é o rótulo
+// ("Periféricos"), que vem junto da API.
+function rotuloCategoria(slug) {
+    const encontrada = categoriasCache.find((categoria) => categoria.slug === slug);
+    return encontrada ? encontrada.rotulo : slug;
+}
+
+// Os botões de filtro vêm da API, e não fixos no HTML: assim uma categoria
+// nova aparece sozinha, e uma que ficou sem produto não vira filtro vazio.
+function renderFiltros() {
+    const caixa = document.getElementById('filtrosCategoria');
+    if (!caixa) return;
+
+    if (categoriasCache.length === 0) {
+        caixa.innerHTML = '';
+        return;
+    }
+
+    const botoes = [{ slug: 'todos', rotulo: 'Todos' }, ...categoriasCache];
+
+    caixa.innerHTML = botoes.map((categoria, indice) => `
+        <button class="filtro-btn${indice === 0 ? ' active' : ''}" type="button" data-filter="${escapeHtml(categoria.slug)}">
+            ${escapeHtml(categoria.rotulo)}
+        </button>`).join('');
+
+    caixa.querySelectorAll('.filtro-btn').forEach((botao) => {
+        botao.addEventListener('click', () => {
+            caixa.querySelectorAll('.filtro-btn').forEach((outro) => outro.classList.remove('active'));
+            botao.classList.add('active');
+
+            const filtro = botao.dataset.filter;
+            document.querySelectorAll('.produto[data-category]').forEach((card) => {
+                card.style.display = filtro === 'todos' || filtro === card.dataset.category ? 'flex' : 'none';
+            });
+        });
+    });
 }
 
 // Monta a vitrine a partir de GET /produtos. Antes os 6 produtos eram HTML
@@ -386,28 +443,50 @@ async function renderProductGrid() {
 
     try {
         const produtos = await carregarCatalogo();
+        renderFiltros();
 
         if (produtos.length === 0) {
             grid.innerHTML = '<p>Nenhum produto disponível no momento.</p>';
             return;
         }
 
-        grid.innerHTML = produtos.map((produto) => `
-            <article class="card" data-category="${escapeHtml(produto.categoria)}">
-                <img src="${escapeHtml(produto.imagemUrl)}" alt="${escapeHtml(produto.nome)}">
-                <h3>${escapeHtml(produto.nome)}</h3>
-                <p>${escapeHtml(produto.descricao)}</p>
-                <div class="price-row">
-                    <span class="price">${formatCurrency(produto.preco)}</span>
-                    <button class="btn btn-primary add-to-cart" data-id="${produto.id}"${produto.disponivel ? '' : ' disabled'}>
-                        ${produto.disponivel ? 'Adicionar' : 'Indisponível'}
-                    </button>
-                </div>
-            </article>
-        `).join('');
+        grid.innerHTML = produtos.map((produto) => {
+            // Sem loading="lazy": a vitrine é a primeira coisa que o visitante
+            // vê, e adiar essas imagens só atrasaria o que importa na tela.
+            const foto = produto.imagemUrl
+                ? `<img src="${escapeHtml(produto.imagemUrl)}" alt="${escapeHtml(produto.nome)}">`
+                : '<span class="sem-foto">Sem foto</span>';
+
+            let estoque = '<span class="estoque estoque-fora">Indisponível</span>';
+            if (produto.disponivel) {
+                estoque = produto.estoqueBaixo
+                    ? '<span class="estoque estoque-baixo">Últimas unidades</span>'
+                    : '<span class="estoque estoque-ok">Em estoque</span>';
+            }
+
+            return `
+                <article class="produto" data-category="${escapeHtml(produto.categoria)}">
+                    <div class="produto-foto">
+                        <span class="produto-chip">${escapeHtml(rotuloCategoria(produto.categoria))}</span>
+                        ${foto}
+                    </div>
+                    <div class="produto-corpo">
+                        <h3 class="produto-nome">${escapeHtml(produto.nome)}</h3>
+                        <p class="produto-desc">${escapeHtml(produto.descricao)}</p>
+                        ${estoque}
+                        <div class="produto-preco">
+                            <span class="valor">${formatCurrency(produto.preco)}</span>
+                            <span class="parcelas">ou 12x de ${formatCurrency(produto.preco / 12)} sem juros</span>
+                        </div>
+                        <button class="btn btn-comprar add-to-cart" type="button" data-id="${produto.id}"${produto.disponivel ? '' : ' disabled'}>
+                            ${produto.disponivel ? 'Adicionar ao carrinho' : 'Indisponível'}
+                        </button>
+                    </div>
+                </article>`;
+        }).join('');
     } catch (error) {
         console.error(error);
-        grid.innerHTML = '<p>Não foi possível carregar os produtos. Verifique sua conexão e recarregue a página.</p>';
+        grid.innerHTML = '<p class="muted">Não foi possível carregar os produtos. Verifique sua conexão e recarregue a página.</p>';
     }
 }
 
@@ -439,7 +518,7 @@ async function renderProfilePage() {
         profileName.textContent = 'Você ainda não fez login.';
         profileEmail.textContent = 'Acesse sua conta para ver o perfil e os pedidos.';
         logoutBtn.style.display = 'none';
-        ordersList.innerHTML = '<div class="empty-state">Você precisa entrar na sua conta para visualizar suas compras.</div>';
+        ordersList.innerHTML = '<div class="estado-vazio">Você precisa entrar na sua conta para visualizar suas compras.</div>';
         return;
     }
 
@@ -459,13 +538,13 @@ async function renderProfilePage() {
 
         if (data.compras && data.compras.length > 0) {
             ordersList.innerHTML = data.compras.map((item) => `
-                <div class="order-item">
-                    <strong>${item.pedido}</strong>
-                    <p class="muted">Status: ${item.status}</p>
+                <div class="pedido">
+                    <strong>${escapeHtml(item.pedido)}</strong>
+                    <span class="muted" style="font-size:.85rem">Status: ${escapeHtml(item.status)}</span>
                 </div>
             `).join('');
         } else {
-            ordersList.innerHTML = '<div class="empty-state">Ainda não há compras registradas para este usuário.</div>';
+            ordersList.innerHTML = '<div class="estado-vazio">Ainda não há compras registradas para este usuário.</div>';
         }
     } catch (error) {
         console.error(error);
@@ -474,7 +553,7 @@ async function renderProfilePage() {
         profileName.textContent = 'Sessão expirada.';
         profileEmail.textContent = 'Faça login novamente para acessar o perfil.';
         logoutBtn.style.display = 'none';
-        ordersList.innerHTML = '<div class="empty-state">Sua sessão expirou. Entre novamente para continuar.</div>';
+        ordersList.innerHTML = '<div class="estado-vazio">Sua sessão expirou. Entre novamente para continuar.</div>';
     }
 }
 
@@ -483,13 +562,12 @@ document.addEventListener('DOMContentLoaded', () => {
     renderWelcomeMessage();
     renderProfilePage();
 
-    const filterButtons = document.querySelectorAll('.filter-btn');
     const productGrid = document.getElementById('productGrid');
     const newsletterForm = document.getElementById('newsletterForm');
     const loginForm = document.getElementById('loginForm');
     const registerForm = document.getElementById('registerForm');
     const recoverForm = document.getElementById('recoverForm');
-    const tabs = document.querySelectorAll('.tab');
+    const tabs = document.querySelectorAll('.aba');
     const toggleRecover = document.getElementById('toggleRecover');
 
     // Delegação: os cards são criados por renderProductGrid() depois deste
@@ -512,19 +590,8 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     }
 
-    filterButtons.forEach((button) => {
-        button.addEventListener('click', () => {
-            filterButtons.forEach((btn) => btn.classList.remove('active'));
-            button.classList.add('active');
-
-            const filter = button.dataset.filter;
-            // Consultado a cada clique porque a vitrine é montada dinamicamente.
-            document.querySelectorAll('.card[data-category]').forEach((card) => {
-                const category = card.dataset.category;
-                card.style.display = filter === 'todos' || filter === category ? 'block' : 'none';
-            });
-        });
-    });
+    // Os filtros são criados e ligados por renderFiltros(), depois que a API
+    // responde — não há botões no HTML para escutar neste ponto.
 
     tabs.forEach((tab) => {
         tab.addEventListener('click', () => {

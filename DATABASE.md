@@ -47,12 +47,35 @@ desta tabela.
 | nome | VARCHAR(150) NOT NULL UNIQUE | Nome exibido na vitrine |
 | descricao | TEXT NOT NULL | Descrição curta |
 | preco | NUMERIC(10,2) NOT NULL CHECK (preco > 0) | Preço unitário |
-| categoria | VARCHAR(50) NOT NULL | Usada pelos filtros da home |
-| imagem_url | TEXT NOT NULL | URL da imagem |
+| categoria | VARCHAR(50) NOT NULL | Slug da taxonomia abaixo |
+| imagem_url | TEXT NOT NULL | URL da imagem (https) |
 | estoque | INTEGER NOT NULL CHECK (estoque >= 0) | Saldo disponível |
 | ativo | BOOLEAN NOT NULL DEFAULT TRUE | Produtos inativos somem da vitrine e do checkout |
+| tags | TEXT[] NOT NULL DEFAULT '{}' | Rótulos de busca, com índice GIN |
 | criado_em | TIMESTAMP | Data/hora da criação |
 | atualizado_em | TIMESTAMP | Última atualização |
+
+#### Taxonomia de categorias
+
+O banco guarda o **slug**; a interface mostra o **rótulo**. Os dois vivem juntos
+na constante `CATEGORIAS` em `server.js`, para que a loja e o painel não inventem
+traduções próprias. A lista é plana, sem hierarquia.
+
+| Slug | Rótulo | O que entra |
+|------|--------|-------------|
+| `hardware` | Hardware | Placas de vídeo, processadores, memória |
+| `perifericos` | Periféricos | Teclados, mouses, mousepads |
+| `audio` | Áudio | Headsets, caixas de som |
+| `monitores` | Monitores | Monitores e telas |
+| `computadores` | Computadores | Notebooks e desktops |
+| `mobile` | Celulares e wearables | Smartphones, smartwatches |
+
+`GET /produtos` devolve apenas as categorias que têm produto à venda, e a loja
+monta os botões de filtro a partir daí — não há categorias fixas no HTML.
+`GET /admin/produtos` devolve a lista completa, para o seletor do painel.
+
+Para acrescentar uma categoria, basta incluí-la em `CATEGORIAS`. Não há
+migration envolvida, já que a coluna é um texto livre validado na aplicação.
 
 ### 3. **historico_compras**
 Armazena o histórico de compras de cada usuário.
@@ -154,6 +177,9 @@ npm run migrate
 | `migrations/001_catalogo_e_integridade.sql` | Cria `produtos` com os 6 itens iniciais, adiciona `pedido_itens.produto_id` e a constraint UNIQUE em `usuarios.email` |
 | `migrations/002_controle_de_estoque.sql` | Adiciona `pedidos.estoque_baixado` |
 | `migrations/003_perfil_administrador.sql` | Adiciona `usuarios.admin` e um índice parcial dos administradores |
+| `migrations/004_taxonomia_e_tags.sql` | Adiciona `produtos.tags` e remapeia as categorias antigas para a taxonomia de eletrônicos |
+| `migrations/005_catalogo_gamer.sql` | Cadastra os 10 produtos gamer iniciais |
+| `migrations/006_reconcilia_placas_duplicadas.sql` | Reconcilia duas placas de vídeo que já existiam cadastradas à mão |
 
 A migration 001 aborta com erro se houver e-mails duplicados em `usuarios`.
 Nesse caso, consolide os registros antes de aplicá-la.
