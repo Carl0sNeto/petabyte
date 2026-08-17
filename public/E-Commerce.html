@@ -83,12 +83,10 @@
                 <span class="apoio">Preços à vista • estoque atualizado em tempo real</span>
             </div>
 
-            <div class="filtros" role="group" aria-label="Filtrar por categoria">
-                <button class="filtro-btn active" type="button" data-filter="todos">Todos</button>
-                <button class="filtro-btn" type="button" data-filter="tecnologia">Tecnologia</button>
-                <button class="filtro-btn" type="button" data-filter="acessorios">Acessórios</button>
-                <button class="filtro-btn" type="button" data-filter="casa">Casa</button>
-            </div>
+            <!-- Preenchido por renderFiltros() com as categorias que têm
+                 produto à venda. Fixar aqui deixava o filtro desatualizado
+                 sempre que o catálogo mudava. -->
+            <div class="filtros" id="filtrosCategoria" role="group" aria-label="Filtrar por categoria"></div>
 
             <!-- Preenchido por renderProductGrid() a partir de GET /produtos.
                  Os preços vivem no banco, não neste arquivo. -->

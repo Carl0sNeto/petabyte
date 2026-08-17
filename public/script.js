@@ -81,6 +81,7 @@ function escapeHtml(valor) {
 }
 
 let catalogoCache = null;
+let categoriasCache = [];
 
 async function carregarCatalogo() {
     if (catalogoCache) {
@@ -95,6 +96,7 @@ async function carregarCatalogo() {
     }
 
     catalogoCache = Array.isArray(data.produtos) ? data.produtos : [];
+    categoriasCache = Array.isArray(data.categorias) ? data.categorias : [];
     return catalogoCache;
 }
 
@@ -395,6 +397,44 @@ async function renderCartPage() {
     }
 }
 
+// O banco guarda o slug ("perifericos"); quem aparece na tela é o rótulo
+// ("Periféricos"), que vem junto da API.
+function rotuloCategoria(slug) {
+    const encontrada = categoriasCache.find((categoria) => categoria.slug === slug);
+    return encontrada ? encontrada.rotulo : slug;
+}
+
+// Os botões de filtro vêm da API, e não fixos no HTML: assim uma categoria
+// nova aparece sozinha, e uma que ficou sem produto não vira filtro vazio.
+function renderFiltros() {
+    const caixa = document.getElementById('filtrosCategoria');
+    if (!caixa) return;
+
+    if (categoriasCache.length === 0) {
+        caixa.innerHTML = '';
+        return;
+    }
+
+    const botoes = [{ slug: 'todos', rotulo: 'Todos' }, ...categoriasCache];
+
+    caixa.innerHTML = botoes.map((categoria, indice) => `
+        <button class="filtro-btn${indice === 0 ? ' active' : ''}" type="button" data-filter="${escapeHtml(categoria.slug)}">
+            ${escapeHtml(categoria.rotulo)}
+        </button>`).join('');
+
+    caixa.querySelectorAll('.filtro-btn').forEach((botao) => {
+        botao.addEventListener('click', () => {
+            caixa.querySelectorAll('.filtro-btn').forEach((outro) => outro.classList.remove('active'));
+            botao.classList.add('active');
+
+            const filtro = botao.dataset.filter;
+            document.querySelectorAll('.produto[data-category]').forEach((card) => {
+                card.style.display = filtro === 'todos' || filtro === card.dataset.category ? 'flex' : 'none';
+            });
+        });
+    });
+}
+
 // Monta a vitrine a partir de GET /produtos. Antes os 6 produtos eram HTML
 // fixo e o preço era lido do texto da página.
 async function renderProductGrid() {
@@ -403,6 +443,7 @@ async function renderProductGrid() {
 
     try {
         const produtos = await carregarCatalogo();
+        renderFiltros();
 
         if (produtos.length === 0) {
             grid.innerHTML = '<p>Nenhum produto disponível no momento.</p>';
@@ -426,7 +467,7 @@ async function renderProductGrid() {
             return `
                 <article class="produto" data-category="${escapeHtml(produto.categoria)}">
                     <div class="produto-foto">
-                        <span class="produto-chip">${escapeHtml(produto.categoria)}</span>
+                        <span class="produto-chip">${escapeHtml(rotuloCategoria(produto.categoria))}</span>
                         ${foto}
                     </div>
                     <div class="produto-corpo">
@@ -521,7 +562,6 @@ document.addEventListener('DOMContentLoaded', () => {
     renderWelcomeMessage();
     renderProfilePage();
 
-    const filterButtons = document.querySelectorAll('.filtro-btn');
     const productGrid = document.getElementById('productGrid');
     const newsletterForm = document.getElementById('newsletterForm');
     const loginForm = document.getElementById('loginForm');
@@ -550,19 +590,8 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     }
 
-    filterButtons.forEach((button) => {
-        button.addEventListener('click', () => {
-            filterButtons.forEach((btn) => btn.classList.remove('active'));
-            button.classList.add('active');
-
-            const filter = button.dataset.filter;
-            // Consultado a cada clique porque a vitrine é montada dinamicamente.
-            document.querySelectorAll('.produto[data-category]').forEach((card) => {
-                const category = card.dataset.category;
-                card.style.display = filter === 'todos' || filter === category ? 'flex' : 'none';
-            });
-        });
-    });
+    // Os filtros são criados e ligados por renderFiltros(), depois que a API
+    // responde — não há botões no HTML para escutar neste ponto.
 
     tabs.forEach((tab) => {
         tab.addEventListener('click', () => {

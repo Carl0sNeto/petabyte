@@ -632,7 +632,54 @@ async function exigirAdmin(req, res, next) {
     }
 }
 
-const CATEGORIAS_VALIDAS = ['tecnologia', 'acessorios', 'casa'];
+// Slug em minúsculas sem acento para o banco e as URLs; rótulo para exibição.
+// Manter os dois juntos evita que a loja e o painel inventem traduções próprias.
+const CATEGORIAS = [
+    { slug: 'hardware', rotulo: 'Hardware' },
+    { slug: 'perifericos', rotulo: 'Periféricos' },
+    { slug: 'audio', rotulo: 'Áudio' },
+    { slug: 'monitores', rotulo: 'Monitores' },
+    { slug: 'computadores', rotulo: 'Computadores' },
+    { slug: 'mobile', rotulo: 'Celulares e wearables' }
+];
+
+const CATEGORIAS_VALIDAS = CATEGORIAS.map((categoria) => categoria.slug);
+
+const LIMITE_TAGS = 12;
+
+// Normaliza para minúsculas sem espaços nas pontas, descarta vazias e
+// repetidas. As tags existem para busca, então convém que sejam previsíveis.
+function normalizarTags(valor) {
+    if (valor === undefined || valor === null) {
+        return { valido: true, tags: undefined };
+    }
+
+    const bruto = Array.isArray(valor)
+        ? valor
+        : String(valor).split(',');
+
+    const tags = [];
+
+    for (const item of bruto) {
+        const tag = String(item).trim().toLowerCase();
+
+        if (!tag) continue;
+
+        if (tag.length > 30) {
+            return { valido: false, mensagem: 'Cada tag pode ter no máximo 30 caracteres.' };
+        }
+
+        if (!tags.includes(tag)) {
+            tags.push(tag);
+        }
+    }
+
+    if (tags.length > LIMITE_TAGS) {
+        return { valido: false, mensagem: `Máximo de ${LIMITE_TAGS} tags por produto.` };
+    }
+
+    return { valido: true, tags };
+}
 
 // Valida e normaliza o corpo enviado pelo painel. Em criação todos os campos
 // obrigatórios precisam vir; em edição, apenas os enviados são conferidos.
@@ -686,6 +733,17 @@ function validarDadosProduto(corpo, { parcial = false } = {}) {
         }
     } else if (!parcial) {
         erros.push('A categoria é obrigatória.');
+    }
+
+    if (definido('tags')) {
+        const resultado = normalizarTags(corpo.tags);
+        if (!resultado.valido) {
+            erros.push(resultado.mensagem);
+        } else {
+            dados.tags = resultado.tags;
+        }
+    } else if (!parcial) {
+        dados.tags = [];
     }
 
     if (definido('descricao')) {
@@ -1141,11 +1199,13 @@ app.get('/produtos', async (req, res) => {
 
     try {
         const resultado = await pool.query(
-            `SELECT id, nome, descricao, preco, categoria, imagem_url, estoque
+            `SELECT id, nome, descricao, preco, categoria, imagem_url, estoque, tags
              FROM produtos
              WHERE ativo = TRUE
              ORDER BY id`
         );
+
+        const emUso = new Set(resultado.rows.map((linha) => linha.categoria));
 
         return res.json({
             produtos: resultado.rows.map((linha) => ({
@@ -1155,10 +1215,14 @@ app.get('/produtos', async (req, res) => {
                 preco: Number(linha.preco),
                 categoria: linha.categoria,
                 imagemUrl: linha.imagem_url,
+                tags: linha.tags || [],
                 disponivel: linha.estoque > 0,
                 // Sinal grosso, sem revelar o saldo exato do estoque.
                 estoqueBaixo: linha.estoque > 0 && linha.estoque <= 5
-            }))
+            })),
+            // Só as categorias que têm produto à venda: a loja monta os filtros
+            // a partir daqui, e um filtro que não devolve nada é ruído.
+            categorias: CATEGORIAS.filter((categoria) => emUso.has(categoria.slug))
         });
     } catch (erro) {
         console.error('Erro ao listar produtos:', erro);
@@ -1183,6 +1247,7 @@ function serializarProduto(linha) {
         imagemUrl: linha.imagem_url,
         estoque: linha.estoque,
         ativo: linha.ativo,
+        tags: linha.tags || [],
         criadoEm: linha.criado_em,
         atualizadoEm: linha.atualizado_em
     };
@@ -1194,7 +1259,7 @@ app.get('/admin/produtos', limitadorAdmin, autenticarToken, exigirAdmin, async (
     try {
         const resultado = await pool.query(
             `SELECT p.id, p.nome, p.descricao, p.preco, p.categoria, p.imagem_url,
-                    p.estoque, p.ativo, p.criado_em, p.atualizado_em,
+                    p.estoque, p.ativo, p.tags, p.criado_em, p.atualizado_em,
                     COALESCE(SUM(i.quantidade) FILTER (WHERE ped.status = 'Pago'), 0)::int AS vendidos
              FROM produtos p
              LEFT JOIN pedido_itens i ON i.produto_id = p.id
@@ -1205,7 +1270,7 @@ app.get('/admin/produtos', limitadorAdmin, autenticarToken, exigirAdmin, async (
 
         return res.json({
             produtos: resultado.rows.map((linha) => ({ ...serializarProduto(linha), vendidos: linha.vendidos })),
-            categorias: CATEGORIAS_VALIDAS
+            categorias: CATEGORIAS
         });
     } catch (erro) {
         console.error('Erro ao listar produtos no painel:', erro);
@@ -1224,10 +1289,10 @@ app.post('/admin/produtos', limitadorAdmin, autenticarToken, exigirAdmin, async 
 
     try {
         const resultado = await pool.query(
-            `INSERT INTO produtos (nome, descricao, preco, categoria, imagem_url, estoque, ativo)
-             VALUES ($1, $2, $3, $4, $5, $6, $7)
+            `INSERT INTO produtos (nome, descricao, preco, categoria, imagem_url, estoque, ativo, tags)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
              RETURNING *`,
-            [d.nome, d.descricao, d.preco, d.categoria, d.imagemUrl, d.estoque, d.ativo]
+            [d.nome, d.descricao, d.preco, d.categoria, d.imagemUrl, d.estoque, d.ativo, d.tags]
         );
 
         console.log(`[ADMIN] Usuário ${req.usuario.id} criou o produto "${d.nome}".`);
@@ -1262,7 +1327,8 @@ app.put('/admin/produtos/:id', limitadorAdmin, autenticarToken, exigirAdmin, asy
         categoria: 'categoria',
         imagemUrl: 'imagem_url',
         estoque: 'estoque',
-        ativo: 'ativo'
+        ativo: 'ativo',
+        tags: 'tags'
     };
 
     const atribuicoes = [];

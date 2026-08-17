@@ -17,7 +17,7 @@ async function criarProduto({ preco, estoque, nome = null, ativo = true }) {
 
     const resultado = await pool.query(
         `INSERT INTO produtos (nome, descricao, preco, categoria, imagem_url, estoque, ativo)
-         VALUES ($1, 'Produto de teste', $2, 'teste', '', $3, $4)
+         VALUES ($1, 'Produto de teste', $2, 'hardware', '', $3, $4)
          RETURNING id, nome, preco, estoque`,
         [nomeUnico, preco, estoque, ativo]
     );

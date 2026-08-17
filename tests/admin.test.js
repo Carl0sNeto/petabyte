@@ -130,15 +130,15 @@ test('painel administrativo', async (t) => {
 
     await t.test('recusa dados inválidos ao criar produto', async () => {
         const casos = [
-            [{ nome: 'A', preco: 10, categoria: 'casa' }, 'nome curto demais'],
-            [{ nome: 'Valido', preco: 0, categoria: 'casa' }, 'preço zero'],
-            [{ nome: 'Valido', preco: -1, categoria: 'casa' }, 'preço negativo'],
+            [{ nome: 'A', preco: 10, categoria: 'hardware' }, 'nome curto demais'],
+            [{ nome: 'Valido', preco: 0, categoria: 'hardware' }, 'preço zero'],
+            [{ nome: 'Valido', preco: -1, categoria: 'hardware' }, 'preço negativo'],
             [{ nome: 'Valido', preco: 10, categoria: 'nao-existe' }, 'categoria fora da lista'],
-            [{ nome: 'Valido', preco: 10, categoria: 'casa', estoque: -5 }, 'estoque negativo'],
-            [{ nome: 'Valido', preco: 10, categoria: 'casa', estoque: 1.5 }, 'estoque fracionado'],
-            [{ nome: 'Valido', preco: 10, categoria: 'casa', imagemUrl: 'http://sem-tls.test/a.jpg' }, 'imagem sem https'],
-            [{ preco: 10, categoria: 'casa' }, 'sem nome'],
-            [{ nome: 'Valido', categoria: 'casa' }, 'sem preço']
+            [{ nome: 'Valido', preco: 10, categoria: 'hardware', estoque: -5 }, 'estoque negativo'],
+            [{ nome: 'Valido', preco: 10, categoria: 'hardware', estoque: 1.5 }, 'estoque fracionado'],
+            [{ nome: 'Valido', preco: 10, categoria: 'hardware', imagemUrl: 'http://sem-tls.test/a.jpg' }, 'imagem sem https'],
+            [{ preco: 10, categoria: 'hardware' }, 'sem nome'],
+            [{ nome: 'Valido', categoria: 'hardware' }, 'sem preço']
         ];
 
         for (const [corpo, motivo] of casos) {
@@ -150,7 +150,7 @@ test('painel administrativo', async (t) => {
     await t.test('recusa nome duplicado com 409', async () => {
         const { status } = await pedir('POST', '/admin/produtos', {
             token: tokenAdmin,
-            corpo: { nome: produto.nome, preco: 10, categoria: 'casa' }
+            corpo: { nome: produto.nome, preco: 10, categoria: 'hardware' }
         });
 
         assert.equal(status, 409);
@@ -161,7 +161,7 @@ test('painel administrativo', async (t) => {
 
         const criado = await pedir('POST', '/admin/produtos', {
             token: tokenAdmin,
-            corpo: { nome, preco: 250.5, categoria: 'tecnologia', estoque: 4, imagemUrl: 'https://exemplo.test/a.jpg' }
+            corpo: { nome, preco: 250.5, categoria: 'perifericos', estoque: 4, imagemUrl: 'https://exemplo.test/a.jpg' }
         });
 
         assert.equal(criado.status, 201);
@@ -182,6 +182,57 @@ test('painel administrativo', async (t) => {
 
         const denovo = await pedir('DELETE', `/admin/produtos/${id}`, { token: tokenAdmin });
         assert.equal(denovo.status, 404);
+    });
+
+    await t.test('normaliza as tags recebidas', async () => {
+        const nome = `${produto.nome}_tags`;
+
+        const criado = await pedir('POST', '/admin/produtos', {
+            token: tokenAdmin,
+            corpo: {
+                nome,
+                preco: 100,
+                categoria: 'hardware',
+                // Maiúsculas, espaços sobrando, vazias e repetidas.
+                tags: '  RTX , gigabyte,, GPU ,rtx,  '
+            }
+        });
+
+        assert.equal(criado.status, 201);
+        assert.deepEqual(criado.dados.produto.tags, ['rtx', 'gigabyte', 'gpu']);
+
+        // Também aceita array, que é como o painel poderia enviar.
+        const editado = await pedir('PUT', `/admin/produtos/${criado.dados.produto.id}`, {
+            token: tokenAdmin,
+            corpo: { tags: ['AMD', 'ryzen'] }
+        });
+
+        assert.deepEqual(editado.dados.produto.tags, ['amd', 'ryzen']);
+
+        await pedir('DELETE', `/admin/produtos/${criado.dados.produto.id}`, { token: tokenAdmin });
+    });
+
+    await t.test('recusa tags acima dos limites', async () => {
+        const demais = Array.from({ length: 13 }, (_, i) => `tag${i}`);
+        const longa = 'x'.repeat(31);
+
+        for (const [tags, motivo] of [[demais, 'mais de 12 tags'], [[longa], 'tag com mais de 30 caracteres']]) {
+            const { status } = await pedir('POST', '/admin/produtos', {
+                token: tokenAdmin,
+                corpo: { nome: `${produto.nome}_${motivo}`, preco: 10, categoria: 'hardware', tags }
+            });
+
+            assert.equal(status, 400, `deveria recusar: ${motivo}`);
+        }
+    });
+
+    await t.test('as categorias vêm com slug e rótulo', async () => {
+        const { dados } = await pedir('GET', '/admin/produtos', { token: tokenAdmin });
+
+        assert.ok(Array.isArray(dados.categorias));
+        assert.ok(dados.categorias.every((c) => typeof c.slug === 'string' && typeof c.rotulo === 'string'));
+        assert.ok(dados.categorias.some((c) => c.slug === 'hardware'));
+        assert.ok(!dados.categorias.some((c) => c.slug === 'casa'), 'a taxonomia antiga não deve sobreviver');
     });
 
     await t.test('recusa edição sem nenhum campo', async () => {
