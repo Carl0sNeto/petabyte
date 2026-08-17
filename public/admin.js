@@ -113,7 +113,7 @@ async function carregarProdutos() {
         categorias = dados.categorias || categorias;
 
         if (dados.produtos.length === 0) {
-            corpo.innerHTML = '<tr><td colspan="8" class="muted">Nenhum produto cadastrado.</td></tr>';
+            corpo.innerHTML = '<tr><td colspan="9" class="muted">Nenhum produto cadastrado.</td></tr>';
             return;
         }
 
@@ -123,9 +123,17 @@ async function carregarProdutos() {
                 ? '<span class="pill pill-danger">esgotado</span>'
                 : (produto.estoque <= 5 ? `<span class="pill pill-warn">${produto.estoque}</span>` : produto.estoque);
 
+            // Sem onerror inline: a CSP define script-src-attr 'none', então
+            // handlers em atributo são bloqueados. O listener é ligado depois,
+            // em ligarFallbackDasMiniaturas().
+            const foto = produto.imagemUrl
+                ? `<img class="thumb" src="${escapeHtml(produto.imagemUrl)}" alt="" data-thumb>`
+                : '<div class="thumb-vazia">sem foto</div>';
+
             return `
                 <tr>
                     <td class="muted">${produto.id}</td>
+                    <td>${foto}</td>
                     <td><strong>${escapeHtml(produto.nome)}</strong></td>
                     <td class="muted">${escapeHtml(produto.categoria)}</td>
                     <td class="num">${formatarMoeda(produto.preco)}</td>
@@ -143,10 +151,25 @@ async function carregarProdutos() {
                 </tr>`;
         }).join('');
 
+        ligarFallbackDasMiniaturas(corpo);
         window.__produtos = dados.produtos;
     } catch (erro) {
-        corpo.innerHTML = `<tr><td colspan="8" class="muted">${escapeHtml(erro.message)}</td></tr>`;
+        corpo.innerHTML = `<tr><td colspan="9" class="muted">${escapeHtml(erro.message)}</td></tr>`;
     }
+}
+
+// Troca a miniatura por um marcador quando a URL não carrega — link quebrado,
+// domínio fora do ar ou arquivo que não é imagem.
+function ligarFallbackDasMiniaturas(container) {
+    container.querySelectorAll('img[data-thumb]').forEach((img) => {
+        img.addEventListener('error', () => {
+            const marcador = document.createElement('div');
+            marcador.className = 'thumb-vazia';
+            marcador.textContent = 'falhou';
+            marcador.title = 'Não foi possível carregar esta imagem.';
+            img.replaceWith(marcador);
+        }, { once: true });
+    });
 }
 
 function preencherCategorias(selecionada) {
@@ -157,6 +180,56 @@ function preencherCategorias(selecionada) {
 }
 
 let produtoEmEdicao = null;
+
+// Atualiza a prévia conforme a URL é digitada ou colada, para o resultado
+// aparecer aqui em vez de só na loja.
+function atualizarPrevia() {
+    const url = document.getElementById('campoImagem').value.trim();
+    const img = document.getElementById('previaImagem');
+    const status = document.getElementById('previaStatus');
+
+    status.classList.remove('erro');
+
+    if (!url) {
+        img.classList.remove('visivel');
+        img.removeAttribute('src');
+        status.textContent = 'Cole uma URL para ver a prévia.';
+        return;
+    }
+
+    if (!/^https:\/\//i.test(url)) {
+        img.classList.remove('visivel');
+        img.removeAttribute('src');
+        status.textContent = 'A URL precisa começar com https://';
+        status.classList.add('erro');
+        return;
+    }
+
+    status.textContent = 'Carregando...';
+    img.classList.remove('visivel');
+    img.src = url;
+}
+
+function configurarPrevia() {
+    const img = document.getElementById('previaImagem');
+    const status = document.getElementById('previaStatus');
+
+    img.addEventListener('load', () => {
+        img.classList.add('visivel');
+        status.classList.remove('erro');
+        status.textContent = `Imagem carregada (${img.naturalWidth}×${img.naturalHeight}).`;
+    });
+
+    img.addEventListener('error', () => {
+        img.classList.remove('visivel');
+        status.classList.add('erro');
+        status.textContent = 'Não foi possível carregar. Confira se o link aponta para o arquivo da imagem.';
+    });
+
+    const campo = document.getElementById('campoImagem');
+    campo.addEventListener('input', atualizarPrevia);
+    campo.addEventListener('change', atualizarPrevia);
+}
 
 function abrirDialogProduto(produto) {
     produtoEmEdicao = produto ? produto.id : null;
@@ -170,6 +243,7 @@ function abrirDialogProduto(produto) {
     document.getElementById('campoDescricao').value = produto ? produto.descricao : '';
     document.getElementById('campoAtivo').value = produto ? String(produto.ativo) : 'true';
     preencherCategorias(produto ? produto.categoria : categorias[0]);
+    atualizarPrevia();
 
     document.getElementById('dialogProduto').showModal();
 }
@@ -421,6 +495,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     document.getElementById('novoProdutoBtn').addEventListener('click', () => abrirDialogProduto(null));
     document.getElementById('formProduto').addEventListener('submit', salvarProduto);
+    configurarPrevia();
 
     document.getElementById('sairBtn').addEventListener('click', () => {
         localStorage.removeItem(TOKEN_KEY);

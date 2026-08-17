@@ -110,6 +110,31 @@
 
         .paginacao { display: flex; justify-content: space-between; align-items: center; gap: 1rem; margin-top: .9rem; flex-wrap: wrap; }
 
+        /* Miniatura na tabela do catálogo */
+        .thumb {
+            width: 46px; height: 46px; object-fit: cover;
+            border-radius: .4rem; border: 1px solid var(--border); background: #f1f5f9;
+            display: block;
+        }
+        .thumb-vazia {
+            width: 46px; height: 46px; border-radius: .4rem; border: 1px dashed var(--border);
+            background: #f8fafc; display: flex; align-items: center; justify-content: center;
+            font-size: .62rem; color: var(--muted); text-align: center; line-height: 1.1;
+        }
+
+        /* Prévia dentro do modal */
+        .previa {
+            margin-top: .6rem; border: 1px solid var(--border); border-radius: .55rem;
+            padding: .7rem; background: #f8fafc; display: flex; align-items: center; gap: .8rem; min-height: 84px;
+        }
+        .previa img {
+            width: 108px; height: 68px; object-fit: contain; border-radius: .35rem;
+            background: white; border: 1px solid var(--border); display: none;
+        }
+        .previa img.visivel { display: block; }
+        .previa span { font-size: .8rem; }
+        .previa span.erro { color: var(--danger); }
+
         .detalhe-linha { display: flex; justify-content: space-between; gap: 1rem; padding: .45rem 0; border-bottom: 1px solid var(--border); font-size: .9rem; }
         .detalhe-linha:last-child { border-bottom: none; }
         .detalhe-linha b { font-weight: 700; }
@@ -160,6 +185,7 @@
                         <thead>
                             <tr>
                                 <th>#</th>
+                                <th>Foto</th>
                                 <th>Produto</th>
                                 <th>Categoria</th>
                                 <th class="num">Preço</th>
@@ -170,7 +196,7 @@
                             </tr>
                         </thead>
                         <tbody id="listaProdutos">
-                            <tr><td colspan="8" class="muted">Carregando...</td></tr>
+                            <tr><td colspan="9" class="muted">Carregando...</td></tr>
                         </tbody>
                     </table>
                 </div>
@@ -247,7 +273,15 @@
                     </div>
                     <div class="full">
                         <label for="campoImagem">URL da imagem (https)</label>
-                        <input id="campoImagem" name="imagemUrl" placeholder="https://...">
+                        <input id="campoImagem" name="imagemUrl" placeholder="https://..." aria-describedby="dicaImagem">
+                        <p id="dicaImagem" class="muted" style="font-size:.78rem;margin:.35rem 0 0">
+                            Link direto para o arquivo da imagem. No site do fornecedor, clique com o botão
+                            direito sobre a foto e escolha "Copiar endereço da imagem".
+                        </p>
+                        <div class="previa" id="previaBox">
+                            <img id="previaImagem" alt="Prévia da imagem do produto">
+                            <span id="previaStatus" class="muted">Cole uma URL para ver a prévia.</span>
+                        </div>
                     </div>
                     <div class="full">
                         <label for="campoDescricao">Descrição</label>
