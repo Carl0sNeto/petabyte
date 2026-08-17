@@ -1155,7 +1155,9 @@ app.get('/produtos', async (req, res) => {
                 preco: Number(linha.preco),
                 categoria: linha.categoria,
                 imagemUrl: linha.imagem_url,
-                disponivel: linha.estoque > 0
+                disponivel: linha.estoque > 0,
+                // Sinal grosso, sem revelar o saldo exato do estoque.
+                estoqueBaixo: linha.estoque > 0 && linha.estoque <= 5
             }))
         });
     } catch (erro) {

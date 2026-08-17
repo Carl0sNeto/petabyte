@@ -358,17 +358,19 @@ async function renderCartPage() {
     const resumo = createCartSummary(itens);
 
     cartItems.innerHTML = itens.map((item) => `
-        <div class="cart-item">
+        <div class="item-carrinho">
             <div>
-                <strong>${escapeHtml(item.produto.nome)}</strong>
-                <div>${formatCurrency(item.produto.preco)} cada</div>
+                <div class="nome">${escapeHtml(item.produto.nome)}</div>
+                <div class="unitario">${formatCurrency(item.produto.preco)} cada</div>
             </div>
-            <div class="cart-actions">
-                <button class="btn btn-secondary quantity-btn" data-id="${item.id}" data-delta="-1">-</button>
-                <span>${item.quantidade}</span>
-                <button class="btn btn-secondary quantity-btn" data-id="${item.id}" data-delta="1">+</button>
-                <span>${formatCurrency(item.produto.preco * item.quantidade)}</span>
-                <button class="btn btn-secondary remove-item" data-id="${item.id}">Apagar</button>
+            <div class="acoes-item">
+                <div class="contador">
+                    <button type="button" class="quantity-btn" data-id="${item.id}" data-delta="-1" aria-label="Diminuir quantidade">−</button>
+                    <span class="qtd">${item.quantidade}</span>
+                    <button type="button" class="quantity-btn" data-id="${item.id}" data-delta="1" aria-label="Aumentar quantidade">+</button>
+                </div>
+                <span class="item-total">${formatCurrency(item.produto.preco * item.quantidade)}</span>
+                <button type="button" class="btn-remover remove-item" data-id="${item.id}">Remover</button>
             </div>
         </div>
     `).join('');
@@ -376,6 +378,21 @@ async function renderCartPage() {
     cartTotal.textContent = formatCurrency(resumo.subtotal);
     shippingValue.textContent = formatCurrency(resumo.shipping);
     finalTotal.textContent = formatCurrency(resumo.total);
+
+    // Faltando pouco para o frete grátis, vale avisar.
+    const avisoFrete = document.getElementById('avisoFrete');
+    if (avisoFrete) {
+        const faltam = 199 - resumo.subtotal;
+        if (resumo.shipping === 0) {
+            avisoFrete.textContent = '🚚 Você ganhou frete grátis neste pedido!';
+            avisoFrete.classList.remove('hidden');
+        } else if (faltam > 0) {
+            avisoFrete.textContent = `Faltam ${formatCurrency(faltam)} para o frete grátis.`;
+            avisoFrete.classList.remove('hidden');
+        } else {
+            avisoFrete.classList.add('hidden');
+        }
+    }
 }
 
 // Monta a vitrine a partir de GET /produtos. Antes os 6 produtos eram HTML
@@ -392,22 +409,43 @@ async function renderProductGrid() {
             return;
         }
 
-        grid.innerHTML = produtos.map((produto) => `
-            <article class="card" data-category="${escapeHtml(produto.categoria)}">
-                <img src="${escapeHtml(produto.imagemUrl)}" alt="${escapeHtml(produto.nome)}">
-                <h3>${escapeHtml(produto.nome)}</h3>
-                <p>${escapeHtml(produto.descricao)}</p>
-                <div class="price-row">
-                    <span class="price">${formatCurrency(produto.preco)}</span>
-                    <button class="btn btn-primary add-to-cart" data-id="${produto.id}"${produto.disponivel ? '' : ' disabled'}>
-                        ${produto.disponivel ? 'Adicionar' : 'Indisponível'}
-                    </button>
-                </div>
-            </article>
-        `).join('');
+        grid.innerHTML = produtos.map((produto) => {
+            // Sem loading="lazy": a vitrine é a primeira coisa que o visitante
+            // vê, e adiar essas imagens só atrasaria o que importa na tela.
+            const foto = produto.imagemUrl
+                ? `<img src="${escapeHtml(produto.imagemUrl)}" alt="${escapeHtml(produto.nome)}">`
+                : '<span class="sem-foto">Sem foto</span>';
+
+            let estoque = '<span class="estoque estoque-fora">Indisponível</span>';
+            if (produto.disponivel) {
+                estoque = produto.estoqueBaixo
+                    ? '<span class="estoque estoque-baixo">Últimas unidades</span>'
+                    : '<span class="estoque estoque-ok">Em estoque</span>';
+            }
+
+            return `
+                <article class="produto" data-category="${escapeHtml(produto.categoria)}">
+                    <div class="produto-foto">
+                        <span class="produto-chip">${escapeHtml(produto.categoria)}</span>
+                        ${foto}
+                    </div>
+                    <div class="produto-corpo">
+                        <h3 class="produto-nome">${escapeHtml(produto.nome)}</h3>
+                        <p class="produto-desc">${escapeHtml(produto.descricao)}</p>
+                        ${estoque}
+                        <div class="produto-preco">
+                            <span class="valor">${formatCurrency(produto.preco)}</span>
+                            <span class="parcelas">ou 12x de ${formatCurrency(produto.preco / 12)} sem juros</span>
+                        </div>
+                        <button class="btn btn-comprar add-to-cart" type="button" data-id="${produto.id}"${produto.disponivel ? '' : ' disabled'}>
+                            ${produto.disponivel ? 'Adicionar ao carrinho' : 'Indisponível'}
+                        </button>
+                    </div>
+                </article>`;
+        }).join('');
     } catch (error) {
         console.error(error);
-        grid.innerHTML = '<p>Não foi possível carregar os produtos. Verifique sua conexão e recarregue a página.</p>';
+        grid.innerHTML = '<p class="muted">Não foi possível carregar os produtos. Verifique sua conexão e recarregue a página.</p>';
     }
 }
 
@@ -439,7 +477,7 @@ async function renderProfilePage() {
         profileName.textContent = 'Você ainda não fez login.';
         profileEmail.textContent = 'Acesse sua conta para ver o perfil e os pedidos.';
         logoutBtn.style.display = 'none';
-        ordersList.innerHTML = '<div class="empty-state">Você precisa entrar na sua conta para visualizar suas compras.</div>';
+        ordersList.innerHTML = '<div class="estado-vazio">Você precisa entrar na sua conta para visualizar suas compras.</div>';
         return;
     }
 
@@ -459,13 +497,13 @@ async function renderProfilePage() {
 
         if (data.compras && data.compras.length > 0) {
             ordersList.innerHTML = data.compras.map((item) => `
-                <div class="order-item">
-                    <strong>${item.pedido}</strong>
-                    <p class="muted">Status: ${item.status}</p>
+                <div class="pedido">
+                    <strong>${escapeHtml(item.pedido)}</strong>
+                    <span class="muted" style="font-size:.85rem">Status: ${escapeHtml(item.status)}</span>
                 </div>
             `).join('');
         } else {
-            ordersList.innerHTML = '<div class="empty-state">Ainda não há compras registradas para este usuário.</div>';
+            ordersList.innerHTML = '<div class="estado-vazio">Ainda não há compras registradas para este usuário.</div>';
         }
     } catch (error) {
         console.error(error);
@@ -474,7 +512,7 @@ async function renderProfilePage() {
         profileName.textContent = 'Sessão expirada.';
         profileEmail.textContent = 'Faça login novamente para acessar o perfil.';
         logoutBtn.style.display = 'none';
-        ordersList.innerHTML = '<div class="empty-state">Sua sessão expirou. Entre novamente para continuar.</div>';
+        ordersList.innerHTML = '<div class="estado-vazio">Sua sessão expirou. Entre novamente para continuar.</div>';
     }
 }
 
@@ -483,13 +521,13 @@ document.addEventListener('DOMContentLoaded', () => {
     renderWelcomeMessage();
     renderProfilePage();
 
-    const filterButtons = document.querySelectorAll('.filter-btn');
+    const filterButtons = document.querySelectorAll('.filtro-btn');
     const productGrid = document.getElementById('productGrid');
     const newsletterForm = document.getElementById('newsletterForm');
     const loginForm = document.getElementById('loginForm');
     const registerForm = document.getElementById('registerForm');
     const recoverForm = document.getElementById('recoverForm');
-    const tabs = document.querySelectorAll('.tab');
+    const tabs = document.querySelectorAll('.aba');
     const toggleRecover = document.getElementById('toggleRecover');
 
     // Delegação: os cards são criados por renderProductGrid() depois deste
@@ -519,9 +557,9 @@ document.addEventListener('DOMContentLoaded', () => {
 
             const filter = button.dataset.filter;
             // Consultado a cada clique porque a vitrine é montada dinamicamente.
-            document.querySelectorAll('.card[data-category]').forEach((card) => {
+            document.querySelectorAll('.produto[data-category]').forEach((card) => {
                 const category = card.dataset.category;
-                card.style.display = filter === 'todos' || filter === category ? 'block' : 'none';
+                card.style.display = filter === 'todos' || filter === category ? 'flex' : 'none';
             });
         });
     });

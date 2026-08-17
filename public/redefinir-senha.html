@@ -4,32 +4,34 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Petabyte | Redefinir senha</title>
-    <style>
-        :root { --primary:#2563eb; --bg:#f8fafc; --card:#fff; --text:#0f172a; --border:#e2e8f0; }
-        * { box-sizing: border-box; }
-        body { margin:0; font-family: Arial, Helvetica, sans-serif; background:var(--bg); color:var(--text); min-height:100vh; display:grid; place-items:center; }
-        .container { width:min(460px, calc(100% - 2rem)); background:var(--card); border:1px solid var(--border); border-radius:1rem; padding:1.5rem; box-shadow:0 10px 25px rgba(15,23,42,0.08); }
-        h1 { margin-top:0; }
-        form { display:flex; flex-direction:column; gap:0.8rem; }
-        input { padding:0.8rem 1rem; border:1px solid var(--border); border-radius:0.75rem; }
-        .btn { padding:0.8rem 1rem; border:none; border-radius:999px; font-weight:700; cursor:pointer; background:var(--primary); color:white; }
-        .muted { color:#64748b; font-size:0.95rem; }
-        .hidden { display:none; }
-    </style>
+    <link rel="stylesheet" href="estilos.css">
 </head>
-<body>
-    <div class="container">
+<body class="pagina-conta">
+    <main class="caixa-conta">
+        <a class="marca" href="E-Commerce.html">Peta<em>byte</em></a>
         <h1>Redefinir senha</h1>
-        <p class="muted">Informe sua nova senha abaixo.</p>
-        <form id="resetForm">
-            <input id="novaSenha" type="password" placeholder="Nova senha" required>
-            <input id="confirmarNovaSenha" type="password" placeholder="Confirmar nova senha" required>
-            <button class="btn" type="submit">Salvar nova senha</button>
+        <p class="muted" style="text-align:center;margin-top:-.8rem">Informe sua nova senha abaixo.</p>
+
+        <form id="resetForm" class="empilhado">
+            <div>
+                <label for="novaSenha">Nova senha</label>
+                <input id="novaSenha" type="password" placeholder="Digite a nova senha" autocomplete="new-password" required>
+            </div>
+            <div>
+                <label for="confirmarNovaSenha">Confirmar nova senha</label>
+                <input id="confirmarNovaSenha" type="password" placeholder="Repita a nova senha" autocomplete="new-password" required>
+            </div>
+            <button class="btn btn-primary btn-bloco" type="submit">Salvar nova senha</button>
         </form>
-        <p class="muted"><a href="auth.html">Voltar para o login</a></p>
-    </div>
+
+        <div class="rodape-conta">
+            <p><a href="auth.html">Voltar para o login</a></p>
+        </div>
+    </main>
 
     <script>
+        // Página independente do script.js: ela roda antes de existir sessão e
+        // não precisa de carrinho, catálogo nem autenticação.
         function resolverApiBaseUrl() {
             if (window.__PETABYTE_API_BASE_URL) {
                 return window.__PETABYTE_API_BASE_URL;
@@ -39,15 +41,13 @@
                 return 'http://localhost:3000';
             }
 
-            const hostname = window.location.hostname;
-            if (hostname === 'localhost' || hostname === '127.0.0.1') {
-                return `${window.location.protocol}//${hostname}:3000`;
-            }
-
+            // Mesma origem da página. Fixar :3000 aqui quebrava qualquer porta
+            // alternativa (testes, staging, container).
             return window.location.origin || 'http://localhost:3000';
         }
 
         const API_BASE_URL = resolverApiBaseUrl().replace(/\/$/, '');
+
         function apiUrl(path) {
             return `${API_BASE_URL}${path.startsWith('/') ? path : `/${path}`}`;
         }
