@@ -167,6 +167,21 @@
         </form>
     </dialog>
 
+    <!-- ---------- Modal de confirmação ----------
+         Substitui window.confirm(), que o navegador pode suprimir. Suprimido,
+         ele retorna false na hora e a ação era cancelada em silêncio. -->
+    <dialog id="dialogConfirmar">
+        <div class="dialog-head" id="confirmarTitulo">Confirmar</div>
+        <div class="dialog-body">
+            <p id="confirmarTexto" style="margin:0"></p>
+            <p id="confirmarDetalhe" class="muted" style="margin:.7rem 0 0;font-size:.86rem"></p>
+        </div>
+        <div class="dialog-foot">
+            <button class="btn btn-secondary" type="button" id="confirmarNao">Cancelar</button>
+            <button class="btn btn-danger" type="button" id="confirmarSim">Excluir</button>
+        </div>
+    </dialog>
+
     <!-- ---------- Modal de pedido ---------- -->
     <dialog id="dialogPedido">
         <div class="dialog-head" id="dialogPedidoTitulo">Pedido</div>

@@ -295,15 +295,55 @@ async function salvarProduto(evento) {
     }
 }
 
+// Confirmação dentro da página, em vez de window.confirm().
+//
+// O navegador pode suprimir diálogos nativos — o Chrome oferece "Impedir que
+// esta página crie diálogos adicionais" depois de alguns seguidos. Suprimido,
+// confirm() devolve false imediatamente e a ação era cancelada sem aviso: o
+// botão Excluir simplesmente não fazia nada.
+function confirmar({ titulo, texto, detalhe = '', rotuloConfirmar = 'Excluir' }) {
+    return new Promise((resolve) => {
+        const dialogo = document.getElementById('dialogConfirmar');
+        const sim = document.getElementById('confirmarSim');
+        const nao = document.getElementById('confirmarNao');
+
+        document.getElementById('confirmarTitulo').textContent = titulo;
+        document.getElementById('confirmarTexto').textContent = texto;
+        document.getElementById('confirmarDetalhe').textContent = detalhe;
+        sim.textContent = rotuloConfirmar;
+
+        const encerrar = (resposta) => {
+            sim.removeEventListener('click', aoConfirmar);
+            nao.removeEventListener('click', aoCancelar);
+            dialogo.removeEventListener('close', aoFechar);
+            if (dialogo.open) dialogo.close();
+            resolve(resposta);
+        };
+
+        const aoConfirmar = () => encerrar(true);
+        const aoCancelar = () => encerrar(false);
+        // Cobre o Esc, que fecha o dialog sem passar pelos botões.
+        const aoFechar = () => encerrar(false);
+
+        sim.addEventListener('click', aoConfirmar);
+        nao.addEventListener('click', aoCancelar);
+        dialogo.addEventListener('close', aoFechar);
+
+        dialogo.showModal();
+        nao.focus();
+    });
+}
+
 async function excluirProduto(id) {
     const produto = (window.__produtos || []).find((p) => p.id === id);
     const nome = produto ? produto.nome : `#${id}`;
 
-    const confirmado = window.confirm(
-        `Excluir "${nome}" definitivamente?\n\n` +
-        'Pedidos antigos mantêm o nome e o preço da época, mas perdem o vínculo com o produto.\n' +
-        'Para apenas tirar da loja, use Editar e escolha "Fora do catálogo".'
-    );
+    const confirmado = await confirmar({
+        titulo: 'Excluir produto',
+        texto: `Excluir "${nome}" definitivamente?`,
+        detalhe: 'Pedidos antigos mantêm o nome e o preço da época, mas perdem o vínculo com o produto. '
+            + 'Para apenas tirar da loja, use Editar e escolha "Fora do catálogo".'
+    });
 
     if (!confirmado) return;
 
