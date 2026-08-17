@@ -59,7 +59,11 @@ app.use(helmet({
             // As páginas usam <script> e style= inline, por isso o 'unsafe-inline'.
             scriptSrc: ["'self'", "'unsafe-inline'"],
             styleSrc: ["'self'", "'unsafe-inline'"],
-            imgSrc: ["'self'", 'data:', 'https://images.unsplash.com'],
+            // Qualquer origem https. O catálogo é editável pelo painel, então
+            // fixar uma lista de domínios faria as imagens de fornecedores novos
+            // serem bloqueadas sem aviso. Só entram URLs cadastradas por um
+            // administrador, e imagem não executa código.
+            imgSrc: ["'self'", 'data:', 'https:'],
             connectSrc: ["'self'"],
             frameAncestors: ["'none'"],
             objectSrc: ["'none'"]
