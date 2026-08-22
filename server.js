@@ -143,7 +143,8 @@ if (!JWT_SECRET || JWT_SECRET.length < 32) {
     console.error(
         'JWT_SECRET ausente ou muito curto (mínimo de 32 caracteres).\n' +
         'Gere um segredo forte com:  node -e "console.log(require(\'crypto\').randomBytes(48).toString(\'hex\'))"\n' +
-        'e defina-o no arquivo .env antes de iniciar o servidor.'
+        'Defina-o no .env (ambiente local) ou nas variáveis de ambiente do serviço\n' +
+        '(hospedagem: no Render, em Environment do serviço web).'
     );
     process.exit(1);
 }
