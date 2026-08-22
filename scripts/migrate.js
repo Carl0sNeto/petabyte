@@ -59,15 +59,29 @@ async function principal() {
     // Diz de onde vem a conexão antes de tentar. Num deploy, "não conectou" sem
     // saber qual host foi usado é o pior lugar para começar a investigar.
     if (process.env.DATABASE_URL) {
-        let destino = '(URL ilegível)';
-        try {
-            const url = new URL(process.env.DATABASE_URL);
-            destino = `${url.hostname}:${url.port || 5432}${url.pathname}`;
-        } catch (erro) {
-            destino = '(DATABASE_URL malformada)';
-        }
+        const bruta = process.env.DATABASE_URL;
         const ssl = process.env.DATABASE_SSL === 'false' ? 'desligado' : 'ligado';
-        console.log(`Conexão: DATABASE_URL -> ${destino} | TLS ${ssl}`);
+
+        try {
+            const url = new URL(bruta);
+            console.log(`Conexão: DATABASE_URL -> ${url.hostname}:${url.port || 5432}${url.pathname} | TLS ${ssl}`);
+        } catch (erro) {
+            // Descreve a forma do valor sem imprimir o conteúdo. Saber que
+            // "tem espaços" ou "não começa com postgresql://" resolve o
+            // problema; ver a senha no log de deploy, não.
+            console.error('DATABASE_URL não é uma URL válida. Formato do valor recebido:');
+            console.error(`   comprimento: ${bruta.length} caracteres`);
+            console.error(`   começa com "postgresql://" ou "postgres://": ${/^postgres(ql)?:\/\//.test(bruta) ? 'sim' : 'NÃO'}`);
+            console.error(`   contém "@": ${bruta.includes('@') ? 'sim' : 'NÃO'}`);
+            console.error(`   contém espaço: ${/\s/.test(bruta) ? 'SIM (provável texto colado junto)' : 'não'}`);
+            console.error(`   contém quebra de linha: ${/[\r\n]/.test(bruta) ? 'SIM' : 'não'}`);
+            console.error(`   contém aspas: ${/["']/.test(bruta) ? 'SIM (remova as aspas)' : 'não'}`);
+            console.error(`   primeiros caracteres: ${JSON.stringify(bruta.slice(0, 14))}`);
+            console.error('');
+            console.error('   Esperado: postgresql://usuario:senha@host/banco');
+            console.error('   Copie a Internal Database URL do Postgres no Render, sozinha,');
+            console.error('   sem rótulo, sem aspas e sem texto em volta.');
+        }
     } else {
         const host = process.env.PGHOST || 'localhost';
         const porta = process.env.PGPORT || 5432;
