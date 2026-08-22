@@ -1,8 +1,11 @@
 {
   "name": "petabyte",
   "version": "1.0.0",
-  "description": "",
-  "main": "script.js",
+  "description": "Loja de tecnologia e eletronicos",
+  "main": "server.js",
+  "engines": {
+    "node": ">=20"
+  },
   "scripts": {
     "test": "node --test --test-concurrency=1 \"tests/**/*.test.js\"",
     "start": "node server.js",
