@@ -615,6 +615,19 @@ form.empilhado { display: flex; flex-direction: column; gap: .85rem; }
     font-variant-numeric: tabular-nums;
     letter-spacing: -.025em;
 }
+/* Vitrine de demonstração: checkout desligado por configuração do servidor. */
+.aviso-demo {
+    background: var(--alerta-suave);
+    border: 1px solid #f0dcb4;
+    color: var(--alerta);
+    padding: .7rem .85rem;
+    border-radius: var(--raio);
+    font-size: .85rem;
+    font-weight: 600;
+    margin: 0 0 .9rem;
+    line-height: 1.45;
+}
+
 .frete-gratis {
     background: var(--sucesso-suave);
     color: var(--sucesso);

@@ -132,6 +132,57 @@ errado. Para testes paralelos, use portas alternativas (3100, 3200).
 
 ---
 
+## Deploy (Render)
+
+Deploy de **demonstração**: a loja fica navegável, mas a compra não conclui.
+
+**Por que Render e não Vercel.** A Vercel roda funções serverless efêmeras;
+este app assume processo vivo. Lá seria preciso exportar handler, trocar o pool
+por um driver com pooler, tirar `inicializarBanco()` do caminho quente e aceitar
+que o rate limit em memória vira decorativo. No Render, `npm start` roda como
+foi escrito.
+
+O `render.yaml` na raiz descreve serviço e banco. No painel: **New > Blueprint**,
+apontando para o repositório.
+
+### Variáveis que o deploy usa
+
+| Variável | Papel |
+|----------|-------|
+| `DATABASE_URL` | Conexão do Postgres gerenciado. Tem precedência sobre as `PG*` |
+| `DATABASE_SSL` | `false` na URL interna do Render, que fica na rede privada |
+| `TRUST_PROXY` | `1` atrás de proxy. Sem isto o rate limit vê um IP só e bloqueia geral |
+| `CHECKOUT_HABILITADO` | `false` desliga o pagamento |
+| `APP_BASE_URL` | Preencher com a URL do Render após o primeiro deploy |
+| `JWT_SECRET` | Gerado pelo Render (`generateValue`), nunca versionado |
+
+### Como o checkout desligado funciona
+
+A decisão é **do servidor**, não da interface. Com `CHECKOUT_HABILITADO=false`:
+
+- `/pagamentos/criar` e `/pagamentos/confirmar` respondem 503 com mensagem clara
+- o webhook responde 200 com `ignorado`, para o Mercado Pago não retentar
+- `GET /config` informa o estado, e o carrinho mostra aviso e desabilita o botão
+
+Remover o `disabled` no DevTools não contorna nada: o servidor recusa igual.
+
+### Ordem do schema no deploy
+
+`startCommand` roda `npm run migrate` antes de `npm start`. O runner aplica
+`inicializar_banco.sql` **antes** das migrations, porque num banco vazio a 001
+faria `ALTER TABLE pedido_itens` numa tabela que ainda não existe. Tudo é
+idempotente, então repetir a cada deploy é seguro.
+
+### Cuidados com o deploy público
+
+- O painel fica acessível em `/admin.html`. Os middlewares protegem, mas a senha
+  da conta admin passa a ser o que separa qualquer pessoa do catálogo.
+- Não use credenciais de produção do Mercado Pago num deploy de hobby.
+- O free tier do Render dorme após inatividade (~30s para acordar) e o banco
+  gratuito expira em 30 dias. Recriar é indolor: as migrations refazem tudo.
+
+---
+
 ## Testes
 
 São **de integração**: batem no banco configurado no `.env`, não em mocks.

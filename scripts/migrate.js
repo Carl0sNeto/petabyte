@@ -9,7 +9,27 @@ const fs = require('fs');
 const path = require('path');
 const { Pool } = require('pg');
 
-const pastaMigrations = path.join(__dirname, '..', 'migrations');
+const raiz = path.join(__dirname, '..');
+const pastaMigrations = path.join(raiz, 'migrations');
+const schemaBase = path.join(raiz, 'inicializar_banco.sql');
+
+// Mesma lógica de server.js: hospedagens gerenciadas entregam DATABASE_URL.
+function configuracaoDoBanco() {
+    if (process.env.DATABASE_URL) {
+        return {
+            connectionString: process.env.DATABASE_URL,
+            ssl: process.env.DATABASE_SSL === 'false' ? false : { rejectUnauthorized: false }
+        };
+    }
+
+    return {
+        user: process.env.PGUSER || 'postgres',
+        host: process.env.PGHOST || 'localhost',
+        database: process.env.PGDATABASE || 'postgres',
+        password: process.env.PGPASSWORD || '',
+        port: Number(process.env.PGPORT || 5432)
+    };
+}
 
 async function principal() {
     if (!fs.existsSync(pastaMigrations)) {
@@ -17,30 +37,33 @@ async function principal() {
         process.exit(1);
     }
 
-    const arquivos = fs
-        .readdirSync(pastaMigrations)
+    // O schema base vem primeiro: num banco vazio, a migration 001 falharia
+    // porque faz ALTER TABLE em pedido_itens, criada por este arquivo.
+    // Como tudo usa IF NOT EXISTS, rodar de novo num banco pronto e inofensivo.
+    const arquivos = [];
+
+    if (fs.existsSync(schemaBase)) {
+        arquivos.push({ rotulo: 'inicializar_banco.sql', caminho: schemaBase });
+    }
+
+    fs.readdirSync(pastaMigrations)
         .filter((nome) => nome.endsWith('.sql'))
-        .sort();
+        .sort()
+        .forEach((nome) => arquivos.push({ rotulo: nome, caminho: path.join(pastaMigrations, nome) }));
 
     if (arquivos.length === 0) {
         console.log('Nenhuma migration encontrada.');
         return;
     }
 
-    const pool = new Pool({
-        user: process.env.PGUSER || 'postgres',
-        host: process.env.PGHOST || 'localhost',
-        database: process.env.PGDATABASE || 'postgres',
-        password: process.env.PGPASSWORD || '',
-        port: Number(process.env.PGPORT || 5432)
-    });
+    const pool = new Pool(configuracaoDoBanco());
 
     let falhou = false;
 
     try {
         for (const arquivo of arquivos) {
-            const sql = fs.readFileSync(path.join(pastaMigrations, arquivo), 'utf8');
-            process.stdout.write(`-> ${arquivo} ... `);
+            const sql = fs.readFileSync(arquivo.caminho, 'utf8');
+            process.stdout.write(`-> ${arquivo.rotulo} ... `);
 
             try {
                 await pool.query(sql);

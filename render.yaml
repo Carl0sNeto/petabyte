@@ -1,0 +1,62 @@
+# Blueprint do Render — https://render.com/docs/blueprint-spec
+#
+# Descreve o serviço e o banco. No painel do Render: New > Blueprint, aponte
+# para este repositório, e ele cria os dois já conectados.
+#
+# Este é um deploy de demonstração: CHECKOUT_HABILITADO fica em false e não há
+# credenciais do Mercado Pago. A loja funciona para navegar, montar carrinho,
+# criar conta e usar o painel — só a finalização de compra está desligada.
+
+databases:
+  - name: petabyte-db
+    databaseName: petabyte
+    plan: free
+    # O free tier do Render expira o banco após 30 dias. Para um projeto de
+    # hobby, basta recriar; as migrations reconstroem o schema do zero.
+
+services:
+  - type: web
+    name: petabyte
+    runtime: node
+    plan: free
+    buildCommand: npm ci
+    # As migrations rodam antes de subir. São idempotentes, então repetir a
+    # cada deploy é seguro, e um banco recém-criado é preparado sozinho.
+    startCommand: npm run migrate && npm start
+    healthCheckPath: /health
+
+    envVars:
+      # Conexão com o banco acima. A URL interna dispensa TLS por ficar na
+      # rede privada do Render, e é mais rápida que a externa.
+      - key: DATABASE_URL
+        fromDatabase:
+          name: petabyte-db
+          property: connectionString
+      - key: DATABASE_SSL
+        value: "false"
+
+      # Gerado pelo Render no primeiro deploy. Fica só no painel, nunca no Git.
+      - key: JWT_SECRET
+        generateValue: true
+
+      # Sem isto, o rate limit trata todos os visitantes como um único IP,
+      # porque atrás do proxy o endereço real vem em X-Forwarded-For.
+      - key: TRUST_PROXY
+        value: "1"
+
+      # Desliga a finalização de compra. O servidor recusa /pagamentos/criar e
+      # a loja mostra o aviso de demonstração.
+      - key: CHECKOUT_HABILITADO
+        value: "false"
+
+      # Preencher no painel depois do primeiro deploy, com a URL que o Render
+      # atribuir (algo como https://petabyte.onrender.com). Alimenta os links
+      # de redefinição de senha.
+      - key: APP_BASE_URL
+        sync: false
+
+      - key: CORS_ORIGINS
+        sync: false
+
+      - key: NODE_ENV
+        value: production

@@ -15,6 +15,19 @@ const rateLimit = require('express-rate-limit');
 const app = express();
 const PORT = Number(process.env.PORT || 3000);
 
+// Atrás de proxy (Render, Nginx), o IP real vem em X-Forwarded-For. Sem isto,
+// o rate limit enxerga todos os visitantes como um único IP e bloqueia geral.
+// Localmente fica 0, porque confiar no header sem proxy permitiria forjá-lo.
+const CONFIANCA_PROXY = Number(process.env.TRUST_PROXY || 0);
+
+if (CONFIANCA_PROXY > 0) {
+    app.set('trust proxy', CONFIANCA_PROXY);
+}
+
+// Desliga o fluxo de pagamento sem tirar o resto do ar. Usado no deploy de
+// demonstração, onde não há credenciais reais do Mercado Pago.
+const CHECKOUT_HABILITADO = process.env.CHECKOUT_HABILITADO !== 'false';
+
 function normalizarListaOrigensCors(valor) {
     if (!valor) return [];
     return valor
@@ -101,13 +114,28 @@ app.use((erro, req, res, next) => {
     return next(erro);
 });
 
-const pool = new Pool({
-    user: process.env.PGUSER || 'postgres',
-    host: process.env.PGHOST || 'localhost',
-    database: process.env.PGDATABASE || 'postgres',
-    password: process.env.PGPASSWORD || '',
-    port: Number(process.env.PGPORT || 5432),
-});
+// Hospedagens gerenciadas (Render, Railway, Neon) entregam o banco como uma
+// única DATABASE_URL. Localmente continuam valendo as variáveis PG* separadas.
+function configuracaoDoBanco() {
+    if (process.env.DATABASE_URL) {
+        return {
+            connectionString: process.env.DATABASE_URL,
+            // A URL externa do Render exige TLS. Se o serviço e o banco estão na
+            // mesma região, a URL interna dispensa: use DATABASE_SSL=false.
+            ssl: process.env.DATABASE_SSL === 'false' ? false : { rejectUnauthorized: false }
+        };
+    }
+
+    return {
+        user: process.env.PGUSER || 'postgres',
+        host: process.env.PGHOST || 'localhost',
+        database: process.env.PGDATABASE || 'postgres',
+        password: process.env.PGPASSWORD || '',
+        port: Number(process.env.PGPORT || 5432)
+    };
+}
+
+const pool = new Pool(configuracaoDoBanco());
 
 const JWT_SECRET = process.env.JWT_SECRET;
 
@@ -1006,6 +1034,16 @@ app.get('/health', (req, res) => {
     res.json({ status: 'ok' });
 });
 
+// Estado da instalação, para a interface se adaptar. O cliente usa isto só
+// para exibição: quem realmente recusa o pagamento é /pagamentos/criar.
+app.get('/config', (req, res) => {
+    res.json({
+        checkoutHabilitado: CHECKOUT_HABILITADO,
+        mensagemCheckoutDesativado: 'Esta é uma vitrine de demonstração. '
+            + 'Você pode navegar, montar o carrinho e explorar o catálogo, mas a finalização de compra está desativada.'
+    });
+});
+
 if (process.env.NODE_ENV !== 'production') {
     app.post('/debug/teste', (req, res) => {
         console.log('[DEBUG] rota de teste chamada');
@@ -1545,6 +1583,14 @@ app.get('/admin/pedidos/:id', limitadorAdmin, autenticarToken, exigirAdmin, asyn
 });
 
 app.post('/pagamentos/criar', autenticarToken, async (req, res) => {
+    // Recusa antes de tocar no banco ou no Mercado Pago. Sem esta guarda, a
+    // ausência de MP_ACCESS_TOKEN virava um 500 com detalhe de configuração.
+    if (!CHECKOUT_HABILITADO) {
+        return res.status(503).json({
+            mensagem: 'A finalização de compra está desativada nesta instalação de demonstração.'
+        });
+    }
+
     if (!bancoDisponivel) {
         return res.status(503).json({ mensagem: 'Banco de dados indisponível no momento.' });
     }
@@ -1626,6 +1672,12 @@ app.post('/pagamentos/criar', autenticarToken, async (req, res) => {
 });
 
 app.post('/pagamentos/confirmar', autenticarToken, async (req, res) => {
+    if (!CHECKOUT_HABILITADO) {
+        return res.status(503).json({
+            mensagem: 'A finalização de compra está desativada nesta instalação de demonstração.'
+        });
+    }
+
     if (!bancoDisponivel) {
         return res.status(503).json({ mensagem: 'Banco de dados indisponível no momento.' });
     }
@@ -1673,6 +1725,12 @@ app.post('/pagamentos/confirmar', autenticarToken, async (req, res) => {
 });
 
 app.post('/pagamentos/webhook', limitadorWebhook, async (req, res) => {
+    // Com o checkout desligado não há pagamento a sincronizar. Responde 200
+    // para o Mercado Pago não entrar em ciclo de retentativas.
+    if (!CHECKOUT_HABILITADO) {
+        return res.status(200).json({ recebido: true, ignorado: 'checkout desativado' });
+    }
+
     try {
         const assinatura = validarAssinaturaWebhook(req);
 

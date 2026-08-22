@@ -82,6 +82,26 @@ function escapeHtml(valor) {
 
 let catalogoCache = null;
 let categoriasCache = [];
+let configCache = null;
+
+// Estado da instalação: hoje só diz se o checkout está ligado. Serve para a
+// interface se adaptar — a recusa de verdade acontece no servidor.
+async function carregarConfig() {
+    if (configCache) {
+        return configCache;
+    }
+
+    try {
+        const response = await fetch(apiUrl('/config'));
+        configCache = await lerResposta(response);
+    } catch (error) {
+        console.error('Não foi possível ler a configuração:', error);
+        // Na dúvida, assume habilitado: o servidor recusa se não estiver.
+        configCache = { checkoutHabilitado: true };
+    }
+
+    return configCache;
+}
 
 async function carregarCatalogo() {
     if (catalogoCache) {
@@ -225,6 +245,13 @@ async function detalharCarrinho() {
 }
 
 async function iniciarPagamento() {
+    const config = await carregarConfig();
+
+    if (config.checkoutHabilitado === false) {
+        aplicarModoDemonstracao(config);
+        return;
+    }
+
     if (!requireAuthenticatedCheckout()) {
         return;
     }
@@ -326,7 +353,31 @@ async function tratarRetornoPagamento() {
     window.history.replaceState({}, document.title, novaUrl);
 }
 
+// Mostra o aviso na própria página e desabilita o botão. Nada de alert(), que
+// o navegador pode suprimir — o mesmo problema que já quebrou o painel.
+function aplicarModoDemonstracao(config) {
+    const aviso = document.getElementById('avisoDemonstracao');
+    const botao = document.querySelector('.checkout-btn');
+
+    if (aviso) {
+        aviso.textContent = config.mensagemCheckoutDesativado
+            || 'A finalização de compra está desativada nesta instalação de demonstração.';
+        aviso.classList.remove('hidden');
+    }
+
+    if (botao) {
+        botao.disabled = true;
+        botao.textContent = 'Compra desativada (demonstração)';
+    }
+}
+
 async function renderCartPage() {
+    const config = await carregarConfig();
+
+    if (config.checkoutHabilitado === false) {
+        aplicarModoDemonstracao(config);
+    }
+
     const cartItems = document.getElementById('cartItems');
     const cartTotal = document.getElementById('cartTotal');
     const shippingValue = document.getElementById('shippingValue');
