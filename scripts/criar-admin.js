@@ -12,13 +12,45 @@ require('dotenv').config();
 
 const { Pool } = require('pg');
 
-const pool = new Pool({
-    user: process.env.PGUSER || 'postgres',
-    host: process.env.PGHOST || 'localhost',
-    database: process.env.PGDATABASE || 'postgres',
-    password: process.env.PGPASSWORD || '',
-    port: Number(process.env.PGPORT || 5432)
-});
+// Mesma lógica de server.js e migrate.js: DATABASE_URL tem precedência, o que
+// permite rodar este script da sua máquina apontando para o banco da
+// hospedagem — necessário porque o plano free do Render não dá acesso a shell.
+function configuracaoDoBanco() {
+    if (process.env.DATABASE_URL) {
+        return {
+            connectionString: process.env.DATABASE_URL,
+            ssl: process.env.DATABASE_SSL === 'false' ? false : { rejectUnauthorized: false }
+        };
+    }
+
+    return {
+        user: process.env.PGUSER || 'postgres',
+        host: process.env.PGHOST || 'localhost',
+        database: process.env.PGDATABASE || 'postgres',
+        password: process.env.PGPASSWORD || '',
+        port: Number(process.env.PGPORT || 5432)
+    };
+}
+
+// Conceder acesso de administrador no banco errado é fácil e silencioso.
+// Dizer em voz alta onde a alteração vai acontecer evita o engano.
+function anunciarDestino() {
+    if (process.env.DATABASE_URL) {
+        try {
+            const url = new URL(process.env.DATABASE_URL);
+            console.log(`Banco: ${url.hostname}${url.pathname} (DATABASE_URL)\n`);
+        } catch (erro) {
+            console.log('Banco: DATABASE_URL definida, mas malformada\n');
+        }
+        return;
+    }
+
+    const host = process.env.PGHOST || 'localhost';
+    const banco = process.env.PGDATABASE || 'postgres';
+    console.log(`Banco: ${host}/${banco} (variáveis PG*)\n`);
+}
+
+const pool = new Pool(configuracaoDoBanco());
 
 function mostrarAjuda() {
     console.log(`
@@ -28,6 +60,15 @@ Uso:
   npm run criar-admin -- --listar             lista os administradores atuais
 
 A conta precisa existir. Cadastre-se normalmente pelo site antes de promover.
+
+Por padrão altera o banco local. Para agir sobre o banco de uma hospedagem,
+defina DATABASE_URL na mesma linha do comando:
+
+  DATABASE_URL="postgresql://..." npm run criar-admin -- email@exemplo.com
+
+No Windows (PowerShell):
+
+  $env:DATABASE_URL="postgresql://..."; npm run criar-admin -- email@exemplo.com
 `.trim());
 }
 
@@ -104,6 +145,8 @@ async function principal() {
         mostrarAjuda();
         return;
     }
+
+    anunciarDestino();
 
     if (argumentos.includes('--listar')) {
         await listarAdmins();
