@@ -732,27 +732,148 @@ form.empilhado { display: flex; flex-direction: column; gap: .85rem; }
    Responsivo
    ========================================================================== */
 
+/* --- Tablet em paisagem e telas médias ---------------------------------- */
 @media (max-width: 940px) {
     .hero-grade { grid-template-columns: 1fr; gap: 2rem; }
+    /* Sem a coluna lateral, o título esticaria por toda a largura. Linha longa
+       demais cansa a leitura. */
+    .hero h1, .hero p { max-width: 30ch; }
+    .hero p { max-width: 52ch; }
+
     .carrinho-grade { grid-template-columns: 1fr; }
     .resumo { position: static; }
     .grade-perfil, .grade-2 { grid-template-columns: 1fr; }
     .newsletter { grid-template-columns: 1fr; padding: 1.6rem; }
     .rodape-grade { grid-template-columns: 1fr 1fr; gap: 1.6rem; }
+
+    /* Os quatro selos quebravam em duas linhas já no tablet, dobrando a altura
+       do cabeçalho. Viram faixa rolável: ocupa uma linha e o corte lateral
+       sinaliza que há mais. */
+    .barra-confianca ul {
+        flex-wrap: nowrap;
+        overflow-x: auto;
+        justify-content: flex-start;
+        gap: 1.3rem;
+        scrollbar-width: none;
+        -ms-overflow-style: none;
+    }
+    .barra-confianca ul::-webkit-scrollbar { display: none; }
+    .barra-confianca li { white-space: nowrap; }
 }
 
+/* --- Tablet em retrato ---------------------------------------------------
+   A grade automática resolvia em 2 colunas largas demais aqui, desperdiçando
+   a tela. Nesta faixa o número de colunas é fixado. */
+@media (min-width: 621px) and (max-width: 940px) {
+    .grade-produtos { grid-template-columns: repeat(3, 1fr); }
+    .topo-nav a { padding: .55rem .8rem; }
+}
+
+/* --- Celular -------------------------------------------------------------
+   O cabeçalho chegava a 33% da altura da tela: a navegação de seis itens
+   quebrava em três linhas e a barra de confiança em duas. Agora marca e
+   carrinho ficam numa linha, e nav e selos viram faixas roláveis. */
 @media (max-width: 620px) {
     .container { width: calc(100% - 1.8rem); }
-    .topo-barra { justify-content: center; gap: .7rem; }
-    .topo-nav { justify-content: center; gap: .2rem; }
-    .topo-nav a { padding: .4rem .55rem; font-size: .87rem; }
-    .barra-confianca ul { gap: 1rem; font-size: .78rem; }
-    .hero { padding: 2.2rem 0 2.5rem; }
-    .grade-produtos { grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: .8rem; }
-    .produto-corpo { padding: .8rem; }
-    .produto-preco .valor { font-size: 1.2rem; }
+
+    .topo-barra {
+        display: grid;
+        grid-template-columns: 1fr auto;
+        gap: .5rem .8rem;
+        padding: .7rem 0;
+    }
+    .marca { font-size: 1.25rem; }
+    .marca span { display: none; }
+
+    .link-carrinho { grid-column: 2; grid-row: 1; }
+
+    .topo-nav {
+        grid-column: 1 / -1;
+        grid-row: 2;
+        flex-wrap: nowrap;
+        overflow-x: auto;
+        gap: .15rem;
+        /* Sem barra de rolagem visível: a faixa se explica pelo corte lateral. */
+        scrollbar-width: none;
+        -ms-overflow-style: none;
+        margin: 0 -.9rem;
+        padding: 0 .9rem;
+    }
+    .topo-nav::-webkit-scrollbar { display: none; }
+    .topo-nav a { white-space: nowrap; font-size: .88rem; }
+
+    .barra-confianca ul {
+        flex-wrap: nowrap;
+        overflow-x: auto;
+        justify-content: flex-start;
+        gap: 1.1rem;
+        scrollbar-width: none;
+        -ms-overflow-style: none;
+        padding: .5rem .9rem;
+    }
+    .barra-confianca ul::-webkit-scrollbar { display: none; }
+    .barra-confianca li { white-space: nowrap; font-size: .8rem; }
+
+    .hero { padding: 1.8rem 0 2rem; }
+    .hero h1, .hero p { max-width: none; }
+    .hero p { font-size: .98rem; }
+    .hero .acoes { display: grid; grid-template-columns: 1fr 1fr; gap: .6rem; }
+    .hero-destaque { padding: 1.1rem; }
+
+    .secao { margin-bottom: 2.2rem; }
+    main { padding: 1.8rem 0 2.5rem; }
+
+    .grade-produtos { grid-template-columns: repeat(2, 1fr); gap: .7rem; }
+    .produto-corpo { padding: .75rem .8rem .85rem; gap: .45rem; }
+    .produto-nome { font-size: .88rem; }
+    .produto-desc { display: none; }
+    .produto-preco .valor { font-size: 1.15rem; }
+    .produto-preco .parcelas { font-size: .72rem; }
+    .produto-chip { font-size: .62rem; padding: .14rem .45rem; }
+
     .rodape-grade { grid-template-columns: 1fr; }
-    .item-carrinho { justify-content: space-between; }
+    .rodape { padding-top: 2rem; }
+
+    /* No carrinho, nome em cima e controles embaixo ocupando a linha toda. */
+    .item-carrinho { flex-direction: column; align-items: stretch; gap: .7rem; }
+    .acoes-item { justify-content: space-between; }
+    .item-total { min-width: 0; }
+
+    .newsletter form { flex-direction: column; }
+    .newsletter input, .newsletter .btn { width: 100%; }
+
+    .caixa-conta { padding: 1.5rem 1.2rem; }
+}
+
+/* --- Alvos de toque ------------------------------------------------------
+   Em tela sensível ao toque o dedo cobre bem mais que o ponteiro do mouse.
+   44px é o mínimo recomendado; vários controles estavam em 27 a 37px.
+   A consulta é por tipo de ponteiro, não por largura: um tablet grande
+   também é tocado com o dedo. */
+@media (pointer: coarse) {
+    .topo-nav a,
+    .filtro-btn,
+    .aba,
+    .rodape a,
+    .rodape-conta a { min-height: 44px; display: inline-flex; align-items: center; }
+
+    .rodape-conta p { margin: 0; }
+
+    .rodape ul { gap: .15rem; }
+
+    .btn { min-height: 46px; }
+    /* Mesmo os botões secundários precisam dos 44px: o dedo não sabe que
+       aquele controle era "menos importante". */
+    .btn-sm { min-height: 44px; }
+    .marca { min-height: 44px; }
+
+    .contador button { width: 44px; height: 44px; font-size: 1.15rem; }
+    .contador .qtd { min-width: 2.8rem; }
+
+    .btn-remover { min-height: 44px; padding: .3rem .6rem; }
+
+    input, select, textarea { min-height: 46px; font-size: 16px; }
+    textarea { min-height: 90px; }
 }
 
 @media (prefers-reduced-motion: reduce) {
