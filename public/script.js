@@ -602,7 +602,7 @@ function renderMenuConta() {
     // Sem sessão o menu vira um link de entrada: um avatar que só leva ao
     // login promete uma conta que ainda não existe.
     if (!hasValidSession() || !usuario) {
-        alvo.innerHTML = '<a href="auth.html">Entrar</a>';
+        alvo.innerHTML = '<a class="entrar-link" href="auth.html">Entrar</a>';
         return;
     }
 

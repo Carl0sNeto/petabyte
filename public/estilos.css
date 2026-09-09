@@ -52,6 +52,10 @@
 
     --largura: 1200px;
 
+    /* Altura única dos controles do cabeçalho: links, entrar, avatar e
+       carrinho. Ter um valor só é o que os mantém alinhados. */
+    --altura-controle-topo: 40px;
+
     --fonte: "Segoe UI", system-ui, -apple-system, Roboto, "Helvetica Neue", Arial, sans-serif;
     --fonte-num: "Segoe UI", system-ui, sans-serif;
 }
@@ -148,14 +152,42 @@ p { margin: 0 0 1rem; }
    porque no celular ele vira faixa rolável com overflow — e overflow recorta
    o painel suspenso do menu da conta, que sumia da tela. */
 .topo-acoes { display: flex; align-items: center; gap: .5rem; flex-shrink: 0; }
-.topo-nav a {
-    color: #c8d6ea;
-    padding: .45rem .7rem;
-    border-radius: var(--raio);
+
+/* Altura declarada uma vez para todos os controles do topo.
+   Ela era herdada do padding de `.topo-nav a`, então tirar carrinho e conta
+   de dentro do <nav> os deixou com 28px e 26px contra 38px dos links — e o
+   "Entrar" ficou com a cor azul padrão de link sobre o fundo marinho. */
+.topo-nav a,
+.avatar-botao,
+.link-carrinho,
+.entrar-link {
+    min-height: var(--altura-controle-topo);
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
     font-size: .93rem;
     font-weight: 600;
+    line-height: 1;
+    white-space: nowrap;
+}
+
+.topo-nav a {
+    color: #c8d6ea;
+    padding: 0 .8rem;
+    border-radius: var(--raio);
 }
 .topo-nav a:hover { background: rgba(255, 255, 255, .09); color: #fff; text-decoration: none; }
+
+/* Sem sessão, "Entrar" ocupa o lugar do avatar. Contorno em vez de fundo
+   cheio: o carrinho ao lado já usa fundo, e dois blocos preenchidos lado a
+   lado competiriam entre si. */
+.entrar-link {
+    color: #fff;
+    padding: 0 1.1rem;
+    border: 1px solid rgba(255, 255, 255, .38);
+    border-radius: 999px;
+}
+.entrar-link:hover { background: rgba(255, 255, 255, .14); color: #fff; text-decoration: none; }
 
 /* ==========================================================================
    Menu da conta (avatar no cabeçalho)
@@ -164,17 +196,14 @@ p { margin: 0 0 1rem; }
 .menu-conta { position: relative; display: inline-flex; }
 
 .avatar-botao {
-    display: inline-flex;
-    align-items: center;
-    gap: .55rem;
+    gap: .5rem;
     background: rgba(255, 255, 255, .1);
     border: 1px solid rgba(255, 255, 255, .16);
     color: #fff;
-    padding: .3rem .7rem .3rem .35rem;
+    /* Menos à esquerda porque o círculo do avatar já ocupa aquele espaço. */
+    padding: 0 .8rem 0 .3rem;
     border-radius: 999px;
     font-family: inherit;
-    font-size: .9rem;
-    font-weight: 600;
     cursor: pointer;
 }
 .avatar-botao:hover { background: rgba(255, 255, 255, .18); }
@@ -183,6 +212,7 @@ p { margin: 0 0 1rem; }
    genérico igual para todo mundo não ajuda a reconhecer a própria conta. */
 .avatar-circulo {
     width: 30px; height: 30px;
+    margin: 0;
     border-radius: 50%;
     background: linear-gradient(135deg, var(--acao), #22d3ee);
     color: #fff;
@@ -246,13 +276,16 @@ p { margin: 0 0 1rem; }
 .menu-conta-painel .sair:hover { background: var(--erro-suave); }
 
 .link-carrinho {
-    display: inline-flex;
-    align-items: center;
     gap: .5rem;
     background: rgba(255, 255, 255, .1);
     border: 1px solid rgba(255, 255, 255, .16);
     color: #fff !important;
+    /* O arredondamento vinha de `.topo-nav a`; agora que o carrinho vive fora
+       do <nav>, precisa ser declarado aqui. */
+    border-radius: 999px;
+    padding: 0 .9rem;
 }
+.link-carrinho:hover { background: rgba(255, 255, 255, .18); text-decoration: none; }
 .contador-carrinho {
     min-width: 1.45rem;
     height: 1.45rem;
@@ -1315,7 +1348,8 @@ form.empilhado { display: flex; flex-direction: column; gap: .85rem; }
     .menu-conta-painel a,
     .menu-conta-painel button { min-height: 46px; }
     .avatar-botao,
-    .link-carrinho { min-height: 44px; }
+    .link-carrinho,
+    .entrar-link { min-height: 44px; }
 
     /* A trilha vira uma linha só de links altos; sem isto eles se sobrepõem. */
     .trilha { align-items: center; row-gap: 0; }
