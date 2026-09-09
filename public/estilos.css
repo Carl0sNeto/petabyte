@@ -143,6 +143,11 @@ p { margin: 0 0 1rem; }
 }
 
 .topo-nav { display: flex; align-items: center; gap: .35rem; flex-wrap: wrap; }
+
+/* Carrinho e conta são ações, não links de navegação. Ficam fora do <nav>
+   porque no celular ele vira faixa rolável com overflow — e overflow recorta
+   o painel suspenso do menu da conta, que sumia da tela. */
+.topo-acoes { display: flex; align-items: center; gap: .5rem; flex-shrink: 0; }
 .topo-nav a {
     color: #c8d6ea;
     padding: .45rem .7rem;
@@ -151,6 +156,94 @@ p { margin: 0 0 1rem; }
     font-weight: 600;
 }
 .topo-nav a:hover { background: rgba(255, 255, 255, .09); color: #fff; text-decoration: none; }
+
+/* ==========================================================================
+   Menu da conta (avatar no cabeçalho)
+   ========================================================================== */
+
+.menu-conta { position: relative; display: inline-flex; }
+
+.avatar-botao {
+    display: inline-flex;
+    align-items: center;
+    gap: .55rem;
+    background: rgba(255, 255, 255, .1);
+    border: 1px solid rgba(255, 255, 255, .16);
+    color: #fff;
+    padding: .3rem .7rem .3rem .35rem;
+    border-radius: 999px;
+    font-family: inherit;
+    font-size: .9rem;
+    font-weight: 600;
+    cursor: pointer;
+}
+.avatar-botao:hover { background: rgba(255, 255, 255, .18); }
+
+/* Iniciais em vez de foto: não há upload de imagem de perfil, e um ícone
+   genérico igual para todo mundo não ajuda a reconhecer a própria conta. */
+.avatar-circulo {
+    width: 30px; height: 30px;
+    border-radius: 50%;
+    background: linear-gradient(135deg, var(--acao), #22d3ee);
+    color: #fff;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    font-size: .78rem;
+    font-weight: 800;
+    flex-shrink: 0;
+}
+
+.avatar-nome { max-width: 8rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.avatar-seta { font-size: .6rem; opacity: .8; transition: transform .15s ease; }
+.avatar-botao[aria-expanded="true"] .avatar-seta { transform: rotate(180deg); }
+
+.menu-conta-painel {
+    position: absolute;
+    top: calc(100% + .5rem);
+    right: 0;
+    width: 262px;
+    background: var(--superficie);
+    border: 1px solid var(--borda);
+    border-radius: var(--raio-g);
+    box-shadow: var(--sombra-3);
+    padding: .4rem;
+    z-index: 60;
+}
+.menu-conta-painel[hidden] { display: none; }
+
+.menu-conta-topo {
+    padding: .7rem .8rem .8rem;
+    border-bottom: 1px solid var(--borda);
+    margin-bottom: .35rem;
+}
+.menu-conta-topo strong { display: block; font-size: .95rem; color: var(--texto); }
+.menu-conta-topo span { font-size: .8rem; color: var(--texto-2); word-break: break-all; }
+
+.menu-conta-painel a,
+.menu-conta-painel button {
+    display: flex;
+    align-items: center;
+    gap: .65rem;
+    width: 100%;
+    padding: .6rem .8rem;
+    border: none;
+    background: none;
+    border-radius: var(--raio);
+    font-family: inherit;
+    font-size: .9rem;
+    font-weight: 600;
+    color: var(--texto);
+    text-align: left;
+    cursor: pointer;
+}
+.menu-conta-painel a:hover,
+.menu-conta-painel button:hover { background: var(--superficie-2); text-decoration: none; }
+.menu-conta-painel .icone { font-size: 1rem; width: 1.2rem; text-align: center; flex-shrink: 0; }
+
+.menu-conta-separador { height: 1px; background: var(--borda); margin: .35rem 0; }
+.menu-conta-painel .sair { color: var(--erro); }
+.menu-conta-painel .sair:hover { background: var(--erro-suave); }
 
 .link-carrinho {
     display: inline-flex;
@@ -882,6 +975,85 @@ form.empilhado { display: flex; flex-direction: column; gap: .85rem; }
 }
 
 /* ==========================================================================
+   Central da conta
+   ========================================================================== */
+
+.cabecalho-conta {
+    display: grid;
+    grid-template-columns: auto 1fr auto;
+    gap: 1.2rem;
+    align-items: center;
+    margin-top: 1.4rem;
+}
+.cabecalho-conta h1 { font-size: 1.35rem; margin: 0 0 .2rem; }
+.cabecalho-conta-texto p { margin: 0; }
+.cabecalho-conta-texto p + p { font-size: .82rem; margin-top: .15rem; }
+
+.avatar-grande {
+    width: 64px; height: 64px;
+    border-radius: 50%;
+    background: linear-gradient(135deg, var(--acao), #22d3ee);
+    color: #fff;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 1.4rem;
+    font-weight: 800;
+}
+
+.aviso-conta {
+    padding: .75rem 1rem;
+    border-radius: var(--raio);
+    margin-bottom: 1.2rem;
+    font-size: .89rem;
+    font-weight: 600;
+}
+.aviso-conta-ok { background: var(--sucesso-suave); color: var(--sucesso); border: 1px solid #bfe6cd; }
+.aviso-conta-erro { background: var(--erro-suave); color: var(--erro); border: 1px solid #f3c9c9; }
+
+.rodape-conta-secao { margin-top: 1.5rem; padding-top: 1.2rem; border-top: 1px solid var(--borda); }
+
+/* Histórico de compras */
+.lista-pedidos { display: flex; flex-direction: column; gap: .8rem; }
+.pedido {
+    border: 1px solid var(--borda);
+    border-left: 3px solid var(--acao);
+    border-radius: var(--raio);
+    padding: .95rem 1.1rem;
+    background: var(--superficie-2);
+}
+.pedido strong { display: block; font-size: .93rem; margin-bottom: .2rem; }
+.pedido span { font-size: .85rem; }
+
+/* Avaliações escritas pela pessoa */
+.lista-minhas-avaliacoes { display: flex; flex-direction: column; gap: .3rem; }
+
+.minha-avaliacao {
+    display: grid;
+    grid-template-columns: 64px 1fr;
+    gap: 1rem;
+    padding: 1rem 0;
+    border-bottom: 1px solid var(--borda);
+}
+.minha-avaliacao:last-child { border-bottom: none; }
+
+.minha-avaliacao-foto {
+    width: 64px; height: 64px;
+    background: #fff;
+    border: 1px solid var(--borda);
+    border-radius: var(--raio);
+    display: flex; align-items: center; justify-content: center;
+    padding: 4px;
+    overflow: hidden;
+}
+.minha-avaliacao-foto img { max-width: 100%; max-height: 100%; object-fit: contain; }
+.minha-avaliacao-foto .sem-foto-mini { color: var(--texto-3); font-size: 1.2rem; }
+
+.minha-avaliacao-produto { font-weight: 700; font-size: .95rem; margin-bottom: .3rem; }
+.minha-avaliacao h3 { font-size: .93rem; margin: .25rem 0 .2rem; }
+.minha-avaliacao p { margin: 0; font-size: .9rem; color: var(--texto-2); }
+
+/* ==========================================================================
    Newsletter
    ========================================================================== */
 
@@ -1034,7 +1206,18 @@ form.empilhado { display: flex; flex-direction: column; gap: .85rem; }
     .marca { font-size: 1.25rem; }
     .marca span { display: none; }
 
-    .link-carrinho { grid-column: 2; grid-row: 1; }
+    /* Conta e carrinho na primeira linha, ao lado da marca; os links de
+       navegação na segunda, em faixa rolável. */
+    .topo-acoes { grid-column: 2; grid-row: 1; }
+    .avatar-nome { display: none; }
+    .link-carrinho { padding: .45rem .7rem; }
+
+    /* Ancorado no bloco de ações, não no botão do avatar: sem o nome ao lado,
+       o botão é estreito demais e o painel de 280px estourava a borda
+       esquerda da tela. O bloco de ações termina na margem do container. */
+    .topo-acoes { position: relative; }
+    .menu-conta { position: static; }
+    .menu-conta-painel { right: 0; width: min(280px, calc(100vw - 2rem)); }
 
     .topo-nav {
         grid-column: 1 / -1;
@@ -1094,6 +1277,12 @@ form.empilhado { display: flex; flex-direction: column; gap: .85rem; }
     /* Em coluna única, a ordem do HTML deixaria o preço depois da ficha
        técnica. Quem abre a página no celular quer ver quanto custa e o botão
        antes de descer para os detalhes. */
+    /* Avatar, texto e botão empilhados: em 375px as três colunas espremiam
+       o nome a ponto de quebrar em várias linhas. */
+    .cabecalho-conta { grid-template-columns: auto 1fr; text-align: left; }
+    .cabecalho-conta .btn { grid-column: 1 / -1; width: 100%; }
+    .cabecalho-conta h1 { font-size: 1.1rem; }
+
     .produto-detalhe { grid-template-columns: 1fr; gap: 1.2rem; }
     .produto-detalhe > .galeria { order: 1; }
     .produto-detalhe > .caixa-compra { order: 2; }
@@ -1122,6 +1311,11 @@ form.empilhado { display: flex; flex-direction: column; gap: .85rem; }
     .rodape-conta a,
     .trilha a,
     .nota-linha a { min-height: 44px; display: inline-flex; align-items: center; }
+
+    .menu-conta-painel a,
+    .menu-conta-painel button { min-height: 46px; }
+    .avatar-botao,
+    .link-carrinho { min-height: 44px; }
 
     /* A trilha vira uma linha só de links altos; sem isto eles se sobrepõem. */
     .trilha { align-items: center; row-gap: 0; }

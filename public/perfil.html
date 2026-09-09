@@ -3,52 +3,120 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Petabyte | Meus pedidos</title>
+    <title>Petabyte | Minha conta</title>
     <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='7' fill='%23081221'/><text x='16' y='23' font-family='sans-serif' font-size='20' font-weight='700' fill='%2322d3ee' text-anchor='middle'>P</text></svg>">
     <link rel="stylesheet" href="estilos.css">
-    <style>
-        .pedido {
-            border: 1px solid var(--borda);
-            border-left: 3px solid var(--acao);
-            border-radius: var(--raio);
-            padding: .95rem 1.1rem;
-            background: var(--superficie-2);
-        }
-        .pedido strong { display: block; font-size: .93rem; margin-bottom: .2rem; }
-        .lista-pedidos { display: flex; flex-direction: column; gap: .8rem; }
-    </style>
 </head>
-<body>
+<body data-page="conta">
     <header class="topo">
         <div class="container topo-barra">
             <a class="marca" href="E-Commerce.html">Peta<em>byte</em> <span>Tecnologia</span></a>
             <nav class="topo-nav" aria-label="Navegação">
                 <a href="E-Commerce.html">Voltar à loja</a>
+            </nav>
+            <div class="topo-acoes">
+                <div class="menu-conta" id="menuConta"></div>
                 <a class="link-carrinho" href="cart.html">
                     Carrinho <span id="cartCount" class="contador-carrinho">0</span>
                 </a>
-            </nav>
+            </div>
         </div>
     </header>
 
     <main class="container">
-        <div class="secao-titulo">
-            <h1>Minha conta</h1>
-            <span class="apoio">Dados cadastrais e histórico de compras</span>
+        <!-- Faixa de identificação, no espírito da "Central Minha Conta" -->
+        <section class="cabecalho-conta card hidden" id="cabecalhoConta">
+            <span class="avatar-grande" id="avatarGrande" aria-hidden="true">–</span>
+            <div class="cabecalho-conta-texto">
+                <h1 id="contaNome">Carregando...</h1>
+                <p class="muted" id="contaEmail"></p>
+                <p class="muted" id="contaDesde"></p>
+            </div>
+            <button class="btn btn-primary" type="button" id="irParaDados">Editar dados</button>
+        </section>
+
+        <!-- Mostrado quando não há sessão válida -->
+        <div class="card estado-vazio hidden" id="semSessao" style="margin-top:1.4rem">
+            <h2 style="margin-top:0">Entre para ver sua conta</h2>
+            <p class="muted">Suas compras, avaliações e configurações ficam aqui.</p>
+            <a class="btn btn-primary" href="auth.html">Entrar</a>
         </div>
 
-        <div class="grade-perfil">
-            <section class="card" id="profileSection">
-                <h2>Meu perfil</h2>
-                <p id="profileName">Carregando...</p>
-                <p id="profileEmail" class="muted"></p>
-                <button class="btn btn-secondary btn-bloco" type="button" id="logoutBtn">Sair da conta</button>
+        <div id="conteudoConta" class="hidden">
+            <div class="abas" role="tablist" id="abasConta">
+                <button class="aba active" type="button" data-secao="compras" role="tab">Minhas compras</button>
+                <button class="aba" type="button" data-secao="avaliacoes" role="tab">Minhas avaliações</button>
+                <button class="aba" type="button" data-secao="dados" role="tab">Configurações</button>
+            </div>
+
+            <!-- ---------- Compras ---------- -->
+            <section class="card" id="secaoCompras">
+                <div class="secao-titulo">
+                    <h2>Minhas compras</h2>
+                    <span class="apoio" id="resumoCompras"></span>
+                </div>
+                <div class="lista-pedidos" id="ordersList">
+                    <div class="estado-vazio">Carregando...</div>
+                </div>
             </section>
 
-            <section class="card" id="ordersSection">
-                <h2>Minhas compras</h2>
-                <div class="lista-pedidos" id="ordersList">
-                    <div class="estado-vazio">Faça login para ver suas compras e pedidos.</div>
+            <!-- ---------- Avaliações ---------- -->
+            <section class="card hidden" id="secaoAvaliacoes">
+                <div class="secao-titulo">
+                    <h2>Minhas avaliações</h2>
+                    <span class="apoio" id="resumoMinhasAvaliacoes"></span>
+                </div>
+                <div id="minhasAvaliacoes">
+                    <div class="estado-vazio">Carregando...</div>
+                </div>
+            </section>
+
+            <!-- ---------- Configurações ---------- -->
+            <section class="card hidden" id="secaoDados">
+                <div class="secao-titulo">
+                    <h2>Configurações</h2>
+                    <span class="apoio">Dados da conta e segurança</span>
+                </div>
+
+                <div id="avisoConta" class="aviso-conta hidden" role="status"></div>
+
+                <div class="grade-2">
+                    <form class="empilhado" id="formDados">
+                        <h3>Dados pessoais</h3>
+                        <div>
+                            <label for="campoNomeConta">Nome</label>
+                            <input id="campoNomeConta" type="text" maxlength="100" required>
+                        </div>
+                        <div>
+                            <label for="campoEmailConta">E-mail</label>
+                            <input id="campoEmailConta" type="email" disabled aria-describedby="dicaEmail">
+                            <p id="dicaEmail" class="muted" style="font-size:.78rem;margin:.35rem 0 0">
+                                O e-mail identifica sua conta no login e não pode ser alterado por aqui.
+                            </p>
+                        </div>
+                        <button class="btn btn-primary" type="submit">Salvar dados</button>
+                    </form>
+
+                    <form class="empilhado" id="formSenha">
+                        <h3>Trocar senha</h3>
+                        <div>
+                            <label for="campoSenhaAtual">Senha atual</label>
+                            <input id="campoSenhaAtual" type="password" autocomplete="current-password" required>
+                        </div>
+                        <div>
+                            <label for="campoSenhaNova">Nova senha</label>
+                            <input id="campoSenhaNova" type="password" autocomplete="new-password" minlength="8" required>
+                        </div>
+                        <div>
+                            <label for="campoSenhaConfirma">Confirmar nova senha</label>
+                            <input id="campoSenhaConfirma" type="password" autocomplete="new-password" minlength="8" required>
+                        </div>
+                        <button class="btn btn-primary" type="submit">Trocar senha</button>
+                    </form>
+                </div>
+
+                <div class="rodape-conta-secao">
+                    <button class="btn btn-secondary" type="button" id="logoutBtn">Sair da conta</button>
                 </div>
             </section>
         </div>
@@ -62,5 +130,6 @@
     </footer>
 
     <script src="script.js"></script>
+    <script src="conta.js"></script>
 </body>
 </html>
