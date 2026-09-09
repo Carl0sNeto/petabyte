@@ -110,6 +110,20 @@ O painel usa `confirmar()`, baseado no elemento `<dialog>`. **Pendência
 conhecida:** a loja ainda tem 19 chamadas a `alert()` em `public/script.js`,
 sujeitas ao mesmo problema.
 
+### Só quem comprou avalia
+
+`comprouOProduto()` procura um pedido com status `Pago` do usuário contendo
+aquele `produto_id`. A mesma consulta decide se o formulário aparece **e** se o
+POST é aceito — um cliente adulterado que poste direto no endpoint recebe 403.
+
+O autor é exibido abreviado (`João S.`), nunca o nome completo nem o e-mail.
+A constraint `UNIQUE (produto_id, usuario_id)` faz o reenvio substituir a
+avaliação anterior em vez de acumular.
+
+> Consequência do deploy de demonstração: com `CHECKOUT_HABILITADO=false`
+> ninguém consegue comprar, logo ninguém consegue avaliar. A página avisa isso
+> em vez de deixar a seção vazia sem explicação.
+
 ### `express.static` serve apenas `public/`
 
 Já serviu `__dirname`, expondo `server.js`, `package.json`, o schema SQL e todo
@@ -202,6 +216,11 @@ falha que originou boa parte deste projeto.
 
 ## Front-end
 
+- `public/produto.html` + `produto.js` — página de detalhe, aberta pela vitrine
+  em `produto.html?id=N`. Carrega **depois** de `script.js`, de quem reaproveita
+  `apiUrl`, `escapeHtml`, `formatCurrency` e `addToCart`.
+- Estrelas são SVG inline, não o caractere `★`: o glifo muda de desenho conforme
+  a fonte instalada e não existe meia estrela em texto.
 - `public/estilos.css` — sistema de design compartilhado por todas as páginas.
   Base marinho, azul para ações, **laranja exclusivo para preço e oferta**.
   Diluir o laranja em outros elementos mata o destaque.

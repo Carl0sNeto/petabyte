@@ -121,6 +121,14 @@
                         <input id="campoPreco" name="preco" type="number" step="0.01" min="0.01" required>
                     </div>
                     <div>
+                        <label for="campoPrecoOriginal">Preço original (R$)</label>
+                        <input id="campoPrecoOriginal" name="precoOriginal" type="number" step="0.01" min="0"
+                               placeholder="deixe vazio se não há desconto" aria-describedby="dicaPrecoOriginal">
+                        <p id="dicaPrecoOriginal" class="muted" style="font-size:.78rem;margin:.35rem 0 0">
+                            Preenchido, a loja mostra o valor riscado e o percentual. Precisa ser maior que o preço atual.
+                        </p>
+                    </div>
+                    <div>
                         <label for="campoEstoque">Estoque</label>
                         <input id="campoEstoque" name="estoque" type="number" step="1" min="0" required>
                     </div>
@@ -157,6 +165,24 @@
                     <div class="full">
                         <label for="campoDescricao">Descrição</label>
                         <textarea id="campoDescricao" name="descricao" maxlength="2000"></textarea>
+                    </div>
+                    <div class="full">
+                        <label for="campoEspecificacoes">Especificações técnicas</label>
+                        <textarea id="campoEspecificacoes" name="especificacoes" rows="5"
+                                  placeholder="Soquete: AM4&#10;Memória: DDR4 até 4600MHz&#10;Chipset: A520"
+                                  aria-describedby="dicaEspec"></textarea>
+                        <p id="dicaEspec" class="muted" style="font-size:.78rem;margin:.35rem 0 0">
+                            Uma por linha, no formato <code>Rótulo: valor</code>. Aparecem como tabela na página do produto.
+                        </p>
+                    </div>
+                    <div class="full">
+                        <label for="campoGaleria">Galeria de imagens</label>
+                        <textarea id="campoGaleria" name="imagens" rows="4"
+                                  placeholder="https://exemplo.com/foto-2.jpg&#10;https://exemplo.com/foto-3.jpg"
+                                  aria-describedby="dicaGaleria"></textarea>
+                        <p id="dicaGaleria" class="muted" style="font-size:.78rem;margin:.35rem 0 0">
+                            Uma URL https por linha, até 8. A imagem principal acima já entra na galeria — liste aqui só as extras.
+                        </p>
                     </div>
                 </div>
             </div>

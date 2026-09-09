@@ -180,6 +180,7 @@ npm run migrate
 | `migrations/004_taxonomia_e_tags.sql` | Adiciona `produtos.tags` e remapeia as categorias antigas para a taxonomia de eletrônicos |
 | `migrations/005_catalogo_gamer.sql` | Cadastra os 10 produtos gamer iniciais |
 | `migrations/006_reconcilia_placas_duplicadas.sql` | Reconcilia duas placas de vídeo que já existiam cadastradas à mão |
+| `migrations/007_pagina_de_produto.sql` | Adiciona `preco_original` e `especificacoes` em produtos, e cria `produto_imagens` e `avaliacoes` |
 
 A migration 001 aborta com erro se houver e-mails duplicados em `usuarios`.
 Nesse caso, consolide os registros antes de aplicá-la.
