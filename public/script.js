@@ -572,6 +572,92 @@ async function renderProductGrid() {
     }
 }
 
+// --------------------------------------------------------------------------
+// Menu da conta no cabeçalho
+//
+// Renderizado por JavaScript porque o conteúdo depende da sessão, e o
+// cabeçalho se repete em quatro páginas. Cada uma só declara o ponto de
+// inserção <div id="menuConta">.
+// --------------------------------------------------------------------------
+
+function iniciaisDoNome(nome) {
+    const partes = String(nome || '').trim().split(/\s+/).filter(Boolean);
+
+    if (partes.length === 0) return '?';
+    if (partes.length === 1) return partes[0].slice(0, 2).toUpperCase();
+
+    return (partes[0][0] + partes[partes.length - 1][0]).toUpperCase();
+}
+
+function primeiroNome(nome) {
+    return String(nome || '').trim().split(/\s+/)[0] || 'Conta';
+}
+
+function renderMenuConta() {
+    const alvo = document.getElementById('menuConta');
+    if (!alvo) return;
+
+    const usuario = getLoggedUser();
+
+    // Sem sessão o menu vira um link de entrada: um avatar que só leva ao
+    // login promete uma conta que ainda não existe.
+    if (!hasValidSession() || !usuario) {
+        alvo.innerHTML = '<a class="entrar-link" href="auth.html">Entrar</a>';
+        return;
+    }
+
+    alvo.innerHTML = `
+        <button class="avatar-botao" type="button" id="avatarBotao"
+                aria-haspopup="true" aria-expanded="false" aria-controls="menuContaPainel">
+            <span class="avatar-circulo" aria-hidden="true">${escapeHtml(iniciaisDoNome(usuario.nome))}</span>
+            <span class="avatar-nome">${escapeHtml(primeiroNome(usuario.nome))}</span>
+            <span class="avatar-seta" aria-hidden="true">▼</span>
+        </button>
+        <div class="menu-conta-painel" id="menuContaPainel" role="menu" hidden>
+            <div class="menu-conta-topo">
+                <strong>${escapeHtml(usuario.nome)}</strong>
+                <span>${escapeHtml(usuario.email)}</span>
+            </div>
+            <a href="perfil.html#compras" role="menuitem"><span class="icone" aria-hidden="true">🧾</span> Minhas compras</a>
+            <a href="perfil.html#avaliacoes" role="menuitem"><span class="icone" aria-hidden="true">⭐</span> Minhas avaliações</a>
+            <a href="perfil.html#dados" role="menuitem"><span class="icone" aria-hidden="true">⚙️</span> Configurações</a>
+            <div class="menu-conta-separador"></div>
+            <button class="sair" type="button" id="sairMenu" role="menuitem">
+                <span class="icone" aria-hidden="true">🚪</span> Sair da conta
+            </button>
+        </div>`;
+
+    const botao = document.getElementById('avatarBotao');
+    const painel = document.getElementById('menuContaPainel');
+
+    const fechar = () => {
+        painel.hidden = true;
+        botao.setAttribute('aria-expanded', 'false');
+    };
+
+    botao.addEventListener('click', (evento) => {
+        evento.stopPropagation();
+        const aberto = !painel.hidden;
+        painel.hidden = aberto;
+        botao.setAttribute('aria-expanded', String(!aberto));
+    });
+
+    // Clique fora e Esc fecham. Sem isso o painel fica preso aberto e cobre
+    // o conteúdo da página.
+    document.addEventListener('click', (evento) => {
+        if (!painel.hidden && !evento.target.closest('#menuConta')) fechar();
+    });
+
+    document.addEventListener('keydown', (evento) => {
+        if (evento.key === 'Escape' && !painel.hidden) {
+            fechar();
+            botao.focus();
+        }
+    });
+
+    document.getElementById('sairMenu').addEventListener('click', logoutUser);
+}
+
 function renderWelcomeMessage() {
     const banner = document.getElementById('welcomeBanner');
     if (!banner) return;
@@ -585,64 +671,11 @@ function renderWelcomeMessage() {
     }
 }
 
-async function renderProfilePage() {
-    const profileName = document.getElementById('profileName');
-    const profileEmail = document.getElementById('profileEmail');
-    const logoutBtn = document.getElementById('logoutBtn');
-    const profileSection = document.getElementById('profileSection');
-    const ordersSection = document.getElementById('ordersSection');
-    const ordersList = document.getElementById('ordersList');
-
-    if (!profileName || !profileEmail || !logoutBtn || !profileSection || !ordersSection || !ordersList) return;
-
-    const user = getLoggedUser();
-    if (!hasValidSession() || !user) {
-        profileName.textContent = 'Você ainda não fez login.';
-        profileEmail.textContent = 'Acesse sua conta para ver o perfil e os pedidos.';
-        logoutBtn.style.display = 'none';
-        ordersList.innerHTML = '<div class="estado-vazio">Você precisa entrar na sua conta para visualizar suas compras.</div>';
-        return;
-    }
-
-    try {
-        const token = localStorage.getItem('petabyte-token');
-        const response = await fetch(apiUrl('/auth/me'), {
-            headers: { Authorization: `Bearer ${token}` }
-        });
-
-        const data = await lerResposta(response);
-        if (!response.ok) throw new Error(data.mensagem || 'Sessão inválida.');
-
-        profileName.textContent = `Nome: ${data.usuario.nome}`;
-        profileEmail.textContent = `E-mail: ${data.usuario.email}`;
-        logoutBtn.style.display = 'inline-block';
-        logoutBtn.onclick = logoutUser;
-
-        if (data.compras && data.compras.length > 0) {
-            ordersList.innerHTML = data.compras.map((item) => `
-                <div class="pedido">
-                    <strong>${escapeHtml(item.pedido)}</strong>
-                    <span class="muted" style="font-size:.85rem">Status: ${escapeHtml(item.status)}</span>
-                </div>
-            `).join('');
-        } else {
-            ordersList.innerHTML = '<div class="estado-vazio">Ainda não há compras registradas para este usuário.</div>';
-        }
-    } catch (error) {
-        console.error(error);
-        localStorage.removeItem(AUTH_KEY);
-        localStorage.removeItem('petabyte-token');
-        profileName.textContent = 'Sessão expirada.';
-        profileEmail.textContent = 'Faça login novamente para acessar o perfil.';
-        logoutBtn.style.display = 'none';
-        ordersList.innerHTML = '<div class="estado-vazio">Sua sessão expirou. Entre novamente para continuar.</div>';
-    }
-}
 
 document.addEventListener('DOMContentLoaded', () => {
     updateCartBadge();
+    renderMenuConta();
     renderWelcomeMessage();
-    renderProfilePage();
 
     const productGrid = document.getElementById('productGrid');
     const newsletterForm = document.getElementById('newsletterForm');

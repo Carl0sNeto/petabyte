@@ -1257,7 +1257,10 @@ app.post('/auth/login', limitadorLogin, async (req, res) => {
 
 app.get('/auth/me', autenticarToken, async (req, res) => {
     try {
-        const usuarioResult = await pool.query('SELECT id, nome, email, admin FROM usuarios WHERE id = $1', [req.usuario.id]);
+        const usuarioResult = await pool.query(
+            'SELECT id, nome, email, admin, criado_em FROM usuarios WHERE id = $1',
+            [req.usuario.id]
+        );
 
         if (usuarioResult.rowCount === 0) {
             return res.status(404).json({ mensagem: 'Usuário não encontrado.' });
@@ -1277,6 +1280,115 @@ app.get('/auth/me', autenticarToken, async (req, res) => {
     } catch (erro) {
         console.error('Erro ao buscar dados do usuário:', erro);
         res.status(500).json({ mensagem: 'Erro ao buscar perfil.' });
+    }
+});
+
+// ---------------------------------------------------------------------------
+// Central da conta
+// ---------------------------------------------------------------------------
+
+app.put('/auth/me', autenticarToken, async (req, res) => {
+    const nome = String((req.body && req.body.nome) || '').trim();
+
+    if (nome.length < 2 || nome.length > 100) {
+        return res.status(400).json({ mensagem: 'O nome precisa ter entre 2 e 100 caracteres.' });
+    }
+
+    try {
+        const resultado = await pool.query(
+            'UPDATE usuarios SET nome = $1 WHERE id = $2 RETURNING id, nome, email, admin, criado_em',
+            [nome, req.usuario.id]
+        );
+
+        if (resultado.rowCount === 0) {
+            return res.status(404).json({ mensagem: 'Usuário não encontrado.' });
+        }
+
+        return res.json({ mensagem: 'Dados atualizados.', usuario: resultado.rows[0] });
+    } catch (erro) {
+        console.error('Erro ao atualizar dados do usuário:', erro);
+        return res.status(500).json({ mensagem: 'Não foi possível atualizar seus dados.' });
+    }
+});
+
+// Trocar senha exige a senha atual. Sem isso, um token roubado — de uma sessão
+// esquecida em máquina compartilhada, por exemplo — bastaria para tomar a conta.
+app.post('/auth/alterar-senha', limitadorSenha, autenticarToken, async (req, res) => {
+    const senhaAtual = String((req.body && req.body.senhaAtual) || '');
+    const novaSenha = String((req.body && req.body.novaSenha) || '');
+
+    if (!senhaAtual || !novaSenha) {
+        return res.status(400).json({ mensagem: 'Informe a senha atual e a nova senha.' });
+    }
+
+    if (novaSenha.length < 8) {
+        return res.status(400).json({ mensagem: 'A nova senha precisa ter pelo menos 8 caracteres.' });
+    }
+
+    if (novaSenha === senhaAtual) {
+        return res.status(400).json({ mensagem: 'A nova senha precisa ser diferente da atual.' });
+    }
+
+    try {
+        const usuario = await pool.query('SELECT senha FROM usuarios WHERE id = $1', [req.usuario.id]);
+
+        if (usuario.rowCount === 0) {
+            return res.status(404).json({ mensagem: 'Usuário não encontrado.' });
+        }
+
+        if (!(await bcrypt.compare(senhaAtual, usuario.rows[0].senha))) {
+            return res.status(403).json({ mensagem: 'A senha atual não confere.' });
+        }
+
+        await pool.query('UPDATE usuarios SET senha = $1 WHERE id = $2', [
+            await bcrypt.hash(novaSenha, 10),
+            req.usuario.id
+        ]);
+
+        // Tokens já emitidos continuam válidos até expirar: o JWT não é
+        // consultado no banco. Trocar a senha não derruba outras sessões.
+        return res.json({
+            mensagem: 'Senha alterada com sucesso.',
+            aviso: 'Sessões abertas em outros dispositivos seguem ativas até expirarem.'
+        });
+    } catch (erro) {
+        console.error('Erro ao alterar senha:', erro);
+        return res.status(500).json({ mensagem: 'Não foi possível alterar a senha.' });
+    }
+});
+
+// Avaliações que a pessoa escreveu, com o produto ao lado para dar contexto.
+app.get('/auth/me/avaliacoes', autenticarToken, async (req, res) => {
+    try {
+        const resultado = await pool.query(
+            `SELECT a.id, a.nota, a.titulo, a.comentario, a.criado_em, a.atualizado_em,
+                    p.id AS produto_id, p.nome AS produto_nome, p.imagem_url, p.ativo
+               FROM avaliacoes a
+               JOIN produtos p ON p.id = a.produto_id
+              WHERE a.usuario_id = $1
+              ORDER BY a.criado_em DESC`,
+            [req.usuario.id]
+        );
+
+        return res.json({
+            avaliacoes: resultado.rows.map((linha) => ({
+                id: linha.id,
+                nota: linha.nota,
+                titulo: linha.titulo,
+                comentario: linha.comentario,
+                criadoEm: linha.criado_em,
+                produto: {
+                    id: linha.produto_id,
+                    nome: linha.produto_nome,
+                    imagemUrl: linha.imagem_url,
+                    // Produto fora do catálogo ainda aparece, mas sem link.
+                    ativo: linha.ativo
+                }
+            }))
+        });
+    } catch (erro) {
+        console.error('Erro ao listar avaliações do usuário:', erro);
+        return res.status(500).json({ mensagem: 'Não foi possível carregar suas avaliações.' });
     }
 });
 

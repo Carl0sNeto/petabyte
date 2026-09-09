@@ -124,6 +124,27 @@ avaliação anterior em vez de acumular.
 > ninguém consegue comprar, logo ninguém consegue avaliar. A página avisa isso
 > em vez de deixar a seção vazia sem explicação.
 
+### Carrinho e conta ficam fora do `<nav>`
+
+No celular a navegação vira faixa rolável com `overflow-x: auto`, e **overflow
+recorta qualquer painel suspenso dentro dele**. Com o menu da conta dentro do
+`<nav>`, o botão abria (`aria-expanded` mudava) e nada aparecia na tela.
+
+Por isso `.topo-acoes` é irmão do `<nav>`, não filho. Semanticamente também é
+mais correto: carrinho e conta são ações, não links de navegação.
+
+### Trocar senha exige a senha atual
+
+`POST /auth/alterar-senha` confere a senha antiga com bcrypt antes de gravar a
+nova. Sem isso, um token vazado — sessão esquecida em máquina compartilhada —
+bastaria para tomar a conta, porque o JWT sozinho já autoriza tudo.
+
+O e-mail não é editável: é a identidade de login, e trocá-lo com segurança
+exigiria confirmação por link, que não funciona sem SMTP configurado.
+
+> Trocar a senha **não derruba** sessões abertas em outros dispositivos: o JWT
+> não é consultado no banco. A resposta avisa isso em vez de deixar subentendido.
+
 ### `express.static` serve apenas `public/`
 
 Já serviu `__dirname`, expondo `server.js`, `package.json`, o schema SQL e todo
