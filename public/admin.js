@@ -250,6 +250,14 @@ function abrirDialogProduto(produto) {
     document.getElementById('campoDescricao').value = produto ? produto.descricao : '';
     document.getElementById('campoAtivo').value = produto ? String(produto.ativo) : 'true';
     document.getElementById('campoTags').value = produto && produto.tags ? produto.tags.join(', ') : '';
+    document.getElementById('campoPrecoOriginal').value = produto && produto.precoOriginal ? produto.precoOriginal : '';
+    // O servidor aceita e devolve pares; na tela editamos como texto por linha.
+    document.getElementById('campoEspecificacoes').value = produto && Array.isArray(produto.especificacoes)
+        ? produto.especificacoes.map((e) => `${e.rotulo}: ${e.valor}`).join('\n')
+        : '';
+    document.getElementById('campoGaleria').value = produto && Array.isArray(produto.imagens)
+        ? produto.imagens.join('\n')
+        : '';
     preencherCategorias(produto ? produto.categoria : (categorias[0] && categorias[0].slug));
     atualizarPrevia();
 
@@ -271,7 +279,12 @@ async function salvarProduto(evento) {
         descricao: document.getElementById('campoDescricao').value,
         ativo: document.getElementById('campoAtivo').value === 'true',
         // O servidor aceita string separada por vírgula e normaliza.
-        tags: document.getElementById('campoTags').value
+        tags: document.getElementById('campoTags').value,
+        // Vazio limpa o desconto; o servidor trata '' como null.
+        precoOriginal: document.getElementById('campoPrecoOriginal').value,
+        // Texto "Rótulo: valor" por linha e URLs por linha: o servidor converte.
+        especificacoes: document.getElementById('campoEspecificacoes').value,
+        imagens: document.getElementById('campoGaleria').value
     };
 
     botao.disabled = true;

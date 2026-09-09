@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Petabyte | Produto</title>
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='7' fill='%23081221'/><text x='16' y='23' font-family='sans-serif' font-size='20' font-weight='700' fill='%2322d3ee' text-anchor='middle'>P</text></svg>">
+    <link rel="stylesheet" href="estilos.css">
+</head>
+<body data-page="produto">
+    <header class="topo">
+        <div class="container topo-barra">
+            <a class="marca" href="E-Commerce.html">Peta<em>byte</em> <span>Tecnologia</span></a>
+            <nav class="topo-nav" aria-label="Navegação">
+                <a href="E-Commerce.html">Produtos</a>
+                <a href="perfil.html">Meus pedidos</a>
+                <a href="auth.html">Entrar</a>
+                <a class="link-carrinho" href="cart.html">
+                    Carrinho <span id="cartCount" class="contador-carrinho">0</span>
+                </a>
+            </nav>
+        </div>
+        <div class="barra-confianca">
+            <div class="container">
+                <ul>
+                    <li>🚚 <b>Frete grátis</b> acima de R$ 199</li>
+                    <li>💳 Até <b>12x sem juros</b></li>
+                    <li>🛡️ <b>Garantia oficial</b> de fábrica</li>
+                    <li>🔒 Pagamento pelo <b>Mercado Pago</b></li>
+                </ul>
+            </div>
+        </div>
+    </header>
+
+    <main class="container">
+        <nav class="trilha" id="trilha" aria-label="Você está aqui"></nav>
+
+        <!-- Estados de carregamento e erro; o conteúdo entra em #detalhe -->
+        <p class="muted" id="carregando" style="padding:3rem 0">Carregando produto...</p>
+
+        <div class="card estado-vazio hidden" id="naoEncontrado" style="margin:2.5rem 0">
+            <h2 style="margin-top:0">Produto não encontrado</h2>
+            <p class="muted">Ele pode ter saído do catálogo.</p>
+            <a class="btn btn-primary" href="E-Commerce.html">Ver todos os produtos</a>
+        </div>
+
+        <div id="detalhe" class="hidden"></div>
+
+        <section class="secao hidden" id="secaoAvaliacoes">
+            <div class="secao-titulo">
+                <h2>Avaliações de quem comprou</h2>
+                <span class="apoio" id="apoioAvaliacoes"></span>
+            </div>
+            <div id="conteudoAvaliacoes"></div>
+        </section>
+    </main>
+
+    <footer class="rodape">
+        <div class="container rodape-fim">
+            <span>Petabyte © 2026 — Todos os direitos reservados.</span>
+            <span>Pagamentos via Mercado Pago</span>
+        </div>
+    </footer>
+
+    <script src="script.js"></script>
+    <script src="produto.js"></script>
+</body>
+</html>

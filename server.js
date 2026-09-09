@@ -775,6 +775,48 @@ function validarDadosProduto(corpo, { parcial = false } = {}) {
         dados.tags = [];
     }
 
+    // Preço original: campo do "de/por". String vazia limpa o valor, porque é
+    // o que um input de formulário envia quando o operador apaga o conteúdo.
+    if (definido('precoOriginal')) {
+        const bruto = corpo.precoOriginal;
+
+        if (bruto === '' || bruto === null) {
+            dados.precoOriginal = null;
+        } else {
+            const valor = Number(bruto);
+
+            if (!Number.isFinite(valor) || valor <= 0) {
+                erros.push('O preço original precisa ser um número maior que zero, ou ficar vazio.');
+            } else if (valor > 9999999.99) {
+                erros.push('O preço original excede o limite da coluna.');
+            } else {
+                dados.precoOriginal = Number(valor.toFixed(2));
+            }
+        }
+    } else if (!parcial) {
+        dados.precoOriginal = null;
+    }
+
+    if (definido('especificacoes')) {
+        const resultado = normalizarEspecificacoes(corpo.especificacoes);
+        if (!resultado.valido) {
+            erros.push(resultado.mensagem);
+        } else {
+            dados.especificacoes = resultado.especificacoes;
+        }
+    } else if (!parcial) {
+        dados.especificacoes = [];
+    }
+
+    if (definido('imagens')) {
+        const resultado = normalizarImagens(corpo.imagens);
+        if (!resultado.valido) {
+            erros.push(resultado.mensagem);
+        } else {
+            dados.imagens = resultado.imagens;
+        }
+    }
+
     if (definido('descricao')) {
         dados.descricao = String(corpo.descricao).trim().slice(0, 2000);
     } else if (!parcial) {
@@ -798,7 +840,92 @@ function validarDadosProduto(corpo, { parcial = false } = {}) {
         dados.ativo = true;
     }
 
+    // Anunciar desconto sobre um preço menor que o atual seria propaganda
+    // enganosa. Só dá para conferir quando os dois valores estão à mão.
+    const precoFinal = dados.preco !== undefined ? dados.preco : null;
+    if (dados.precoOriginal && precoFinal !== null && dados.precoOriginal <= precoFinal) {
+        erros.push('O preço original precisa ser maior que o preço atual para valer como desconto.');
+    }
+
     return { valido: erros.length === 0, erros, dados };
+}
+
+const LIMITE_ESPECIFICACOES = 30;
+
+// Lista de pares rótulo/valor. Aceita array de objetos (painel) ou texto no
+// formato "Rótulo: valor" por linha, que é como se cola de uma ficha técnica.
+function normalizarEspecificacoes(valor) {
+    let bruto;
+
+    if (Array.isArray(valor)) {
+        bruto = valor;
+    } else if (typeof valor === 'string') {
+        bruto = valor.split(/\r?\n/).map((linha) => {
+            const separador = linha.indexOf(':');
+            if (separador < 0) return null;
+            return { rotulo: linha.slice(0, separador), valor: linha.slice(separador + 1) };
+        }).filter(Boolean);
+    } else if (valor === null || valor === undefined) {
+        return { valido: true, especificacoes: [] };
+    } else {
+        return { valido: false, mensagem: 'Especificações em formato inválido.' };
+    }
+
+    const especificacoes = [];
+
+    for (const item of bruto) {
+        const rotulo = String((item && item.rotulo) || '').trim().slice(0, 60);
+        const conteudo = String((item && item.valor) || '').trim().slice(0, 200);
+
+        if (!rotulo || !conteudo) continue;
+
+        especificacoes.push({ rotulo, valor: conteudo });
+    }
+
+    if (especificacoes.length > LIMITE_ESPECIFICACOES) {
+        return { valido: false, mensagem: `Máximo de ${LIMITE_ESPECIFICACOES} especificações por produto.` };
+    }
+
+    return { valido: true, especificacoes };
+}
+
+const LIMITE_IMAGENS = 8;
+
+// Galeria: aceita array de URLs ou texto com uma URL por linha.
+function normalizarImagens(valor) {
+    let bruto;
+
+    if (Array.isArray(valor)) {
+        bruto = valor;
+    } else if (typeof valor === 'string') {
+        bruto = valor.split(/\r?\n/);
+    } else if (valor === null || valor === undefined) {
+        return { valido: true, imagens: [] };
+    } else {
+        return { valido: false, mensagem: 'Galeria em formato inválido.' };
+    }
+
+    const imagens = [];
+
+    for (const item of bruto) {
+        const url = String(typeof item === 'string' ? item : (item && item.url) || '').trim();
+
+        if (!url) continue;
+
+        if (!/^https:\/\//i.test(url)) {
+            return { valido: false, mensagem: 'Cada imagem da galeria precisa começar com https://.' };
+        }
+
+        if (!imagens.includes(url)) {
+            imagens.push(url);
+        }
+    }
+
+    if (imagens.length > LIMITE_IMAGENS) {
+        return { valido: false, mensagem: `Máximo de ${LIMITE_IMAGENS} imagens por produto.` };
+    }
+
+    return { valido: true, imagens };
 }
 
 async function popularHistoricoPadrao() {
@@ -1237,11 +1364,18 @@ app.get('/produtos', async (req, res) => {
     }
 
     try {
+        // A média entra na consulta da vitrine para as estrelas aparecerem já
+        // no cartão. LEFT JOIN porque produto sem avaliação ainda é listado.
         const resultado = await pool.query(
-            `SELECT id, nome, descricao, preco, categoria, imagem_url, estoque, tags
-             FROM produtos
-             WHERE ativo = TRUE
-             ORDER BY id`
+            `SELECT p.id, p.nome, p.descricao, p.preco, p.preco_original, p.categoria,
+                    p.imagem_url, p.estoque, p.tags,
+                    COALESCE(ROUND(AVG(a.nota)::numeric, 2), 0) AS nota_media,
+                    COUNT(a.id)::int AS total_avaliacoes
+             FROM produtos p
+             LEFT JOIN avaliacoes a ON a.produto_id = p.id
+             WHERE p.ativo = TRUE
+             GROUP BY p.id
+             ORDER BY p.id`
         );
 
         const emUso = new Set(resultado.rows.map((linha) => linha.categoria));
@@ -1252,9 +1386,12 @@ app.get('/produtos', async (req, res) => {
                 nome: linha.nome,
                 descricao: linha.descricao,
                 preco: Number(linha.preco),
+                precoOriginal: linha.preco_original === null ? null : Number(linha.preco_original),
                 categoria: linha.categoria,
                 imagemUrl: linha.imagem_url,
                 tags: linha.tags || [],
+                notaMedia: Number(linha.nota_media),
+                totalAvaliacoes: linha.total_avaliacoes,
                 disponivel: linha.estoque > 0,
                 // Sinal grosso, sem revelar o saldo exato do estoque.
                 estoqueBaixo: linha.estoque > 0 && linha.estoque <= 5
@@ -1276,12 +1413,356 @@ app.get('/produtos', async (req, res) => {
 // A ordem importa: autenticarToken preenche req.usuario, exigirAdmin o consulta.
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// Página de produto
+// ---------------------------------------------------------------------------
+
+const LIMITE_AVALIACOES_POR_PAGINA = 10;
+
+// Quem escreveu a avaliação aparece pelo primeiro nome e a inicial do
+// sobrenome. Nome completo de cliente numa página pública é exposição
+// desnecessária, e só o primeiro nome confunde quando há homônimos.
+function nomeAbreviado(nomeCompleto) {
+    const partes = String(nomeCompleto || '').trim().split(/\s+/).filter(Boolean);
+
+    if (partes.length === 0) return 'Cliente';
+    if (partes.length === 1) return partes[0];
+
+    return `${partes[0]} ${partes[partes.length - 1][0].toUpperCase()}.`;
+}
+
+function serializarAvaliacao(linha) {
+    return {
+        id: linha.id,
+        nota: linha.nota,
+        titulo: linha.titulo,
+        comentario: linha.comentario,
+        autor: nomeAbreviado(linha.usuario_nome),
+        criadoEm: linha.criado_em,
+        editada: linha.atualizado_em && linha.criado_em
+            && new Date(linha.atualizado_em).getTime() - new Date(linha.criado_em).getTime() > 1000
+    };
+}
+
+// Só avalia quem tem pedido pago contendo o produto. A consulta é a fonte da
+// verdade tanto para liberar o formulário quanto para aceitar o POST — nunca
+// confiamos no cliente dizer que comprou.
+async function comprouOProduto(usuarioId, produtoId, executor = pool) {
+    const resultado = await executor.query(
+        `SELECT 1
+           FROM pedidos ped
+           JOIN pedido_itens item ON item.pedido_id = ped.id
+          WHERE ped.usuario_id = $1
+            AND item.produto_id = $2
+            AND ped.status = 'Pago'
+          LIMIT 1`,
+        [usuarioId, produtoId]
+    );
+
+    return resultado.rowCount > 0;
+}
+
+async function resumoDeAvaliacoes(produtoId, executor = pool) {
+    const resultado = await executor.query(
+        `SELECT COUNT(*)::int AS total,
+                COALESCE(ROUND(AVG(nota)::numeric, 2), 0) AS media,
+                COUNT(*) FILTER (WHERE nota = 5)::int AS n5,
+                COUNT(*) FILTER (WHERE nota = 4)::int AS n4,
+                COUNT(*) FILTER (WHERE nota = 3)::int AS n3,
+                COUNT(*) FILTER (WHERE nota = 2)::int AS n2,
+                COUNT(*) FILTER (WHERE nota = 1)::int AS n1
+           FROM avaliacoes WHERE produto_id = $1`,
+        [produtoId]
+    );
+
+    const linha = resultado.rows[0];
+
+    return {
+        total: linha.total,
+        media: Number(linha.media),
+        distribuicao: { 5: linha.n5, 4: linha.n4, 3: linha.n3, 2: linha.n2, 1: linha.n1 }
+    };
+}
+
+app.get('/produtos/:id', async (req, res) => {
+    if (!bancoDisponivel) {
+        return res.status(503).json({ mensagem: 'Banco de dados indisponível no momento.' });
+    }
+
+    const id = Number(req.params.id);
+
+    if (!Number.isInteger(id) || id <= 0) {
+        return res.status(400).json({ mensagem: 'Identificador inválido.' });
+    }
+
+    try {
+        const resultado = await pool.query(
+            `SELECT id, nome, descricao, preco, preco_original, categoria, imagem_url,
+                    estoque, tags, especificacoes
+               FROM produtos WHERE id = $1 AND ativo = TRUE`,
+            [id]
+        );
+
+        if (resultado.rowCount === 0) {
+            return res.status(404).json({ mensagem: 'Produto não encontrado.' });
+        }
+
+        const p = resultado.rows[0];
+
+        const imagens = await pool.query(
+            'SELECT url, descricao FROM produto_imagens WHERE produto_id = $1 ORDER BY posicao, id',
+            [id]
+        );
+
+        const avaliacoes = await pool.query(
+            `SELECT a.id, a.nota, a.titulo, a.comentario, a.criado_em, a.atualizado_em,
+                    u.nome AS usuario_nome
+               FROM avaliacoes a
+               JOIN usuarios u ON u.id = a.usuario_id
+              WHERE a.produto_id = $1
+              ORDER BY a.criado_em DESC
+              LIMIT $2`,
+            [id, LIMITE_AVALIACOES_POR_PAGINA]
+        );
+
+        const precoOriginal = p.preco_original === null ? null : Number(p.preco_original);
+        const preco = Number(p.preco);
+
+        // A galeria começa pela imagem principal, que é a mesma da vitrine.
+        const galeria = [];
+        if (p.imagem_url) {
+            galeria.push({ url: p.imagem_url, descricao: p.nome });
+        }
+        imagens.rows.forEach((linha) => {
+            if (linha.url !== p.imagem_url) {
+                galeria.push({ url: linha.url, descricao: linha.descricao || p.nome });
+            }
+        });
+
+        return res.json({
+            produto: {
+                id: p.id,
+                nome: p.nome,
+                descricao: p.descricao,
+                preco,
+                precoOriginal,
+                // Só faz sentido anunciar desconto se o original for maior.
+                descontoPercentual: precoOriginal && precoOriginal > preco
+                    ? Math.round((1 - preco / precoOriginal) * 100)
+                    : null,
+                categoria: p.categoria,
+                categoriaRotulo: (CATEGORIAS.find((c) => c.slug === p.categoria) || {}).rotulo || p.categoria,
+                imagemUrl: p.imagem_url,
+                galeria,
+                especificacoes: Array.isArray(p.especificacoes) ? p.especificacoes : [],
+                tags: p.tags || [],
+                disponivel: p.estoque > 0,
+                estoqueBaixo: p.estoque > 0 && p.estoque <= 5
+            },
+            avaliacoes: {
+                resumo: await resumoDeAvaliacoes(id),
+                itens: avaliacoes.rows.map(serializarAvaliacao)
+            },
+            // A loja usa isto para explicar por que ninguém pode avaliar ainda.
+            checkoutHabilitado: CHECKOUT_HABILITADO
+        });
+    } catch (erro) {
+        console.error('Erro ao carregar produto:', erro);
+        return res.status(500).json({ mensagem: 'Não foi possível carregar o produto.' });
+    }
+});
+
+app.get('/produtos/:id/avaliacoes', async (req, res) => {
+    const id = Number(req.params.id);
+
+    if (!Number.isInteger(id) || id <= 0) {
+        return res.status(400).json({ mensagem: 'Identificador inválido.' });
+    }
+
+    const porPagina = Math.min(50, Math.max(1, Number(req.query.porPagina) || LIMITE_AVALIACOES_POR_PAGINA));
+    const pagina = Math.max(1, Number(req.query.pagina) || 1);
+
+    try {
+        const total = await pool.query('SELECT COUNT(*)::int AS total FROM avaliacoes WHERE produto_id = $1', [id]);
+
+        const resultado = await pool.query(
+            `SELECT a.id, a.nota, a.titulo, a.comentario, a.criado_em, a.atualizado_em,
+                    u.nome AS usuario_nome
+               FROM avaliacoes a
+               JOIN usuarios u ON u.id = a.usuario_id
+              WHERE a.produto_id = $1
+              ORDER BY a.criado_em DESC
+              LIMIT $2 OFFSET $3`,
+            [id, porPagina, (pagina - 1) * porPagina]
+        );
+
+        return res.json({
+            avaliacoes: resultado.rows.map(serializarAvaliacao),
+            resumo: await resumoDeAvaliacoes(id),
+            paginacao: {
+                pagina,
+                porPagina,
+                total: total.rows[0].total,
+                totalPaginas: Math.max(1, Math.ceil(total.rows[0].total / porPagina))
+            }
+        });
+    } catch (erro) {
+        console.error('Erro ao listar avaliações:', erro);
+        return res.status(500).json({ mensagem: 'Não foi possível carregar as avaliações.' });
+    }
+});
+
+// Diz à interface se o formulário deve aparecer, e devolve a avaliação já
+// escrita para permitir edição.
+app.get('/produtos/:id/avaliacoes/minha', autenticarToken, async (req, res) => {
+    const id = Number(req.params.id);
+
+    if (!Number.isInteger(id) || id <= 0) {
+        return res.status(400).json({ mensagem: 'Identificador inválido.' });
+    }
+
+    try {
+        const comprou = await comprouOProduto(req.usuario.id, id);
+
+        const minha = await pool.query(
+            'SELECT id, nota, titulo, comentario, criado_em FROM avaliacoes WHERE produto_id = $1 AND usuario_id = $2',
+            [id, req.usuario.id]
+        );
+
+        return res.json({
+            podeAvaliar: comprou,
+            motivo: comprou ? null : 'Só quem comprou este produto pode avaliá-lo.',
+            avaliacao: minha.rowCount === 0 ? null : {
+                id: minha.rows[0].id,
+                nota: minha.rows[0].nota,
+                titulo: minha.rows[0].titulo,
+                comentario: minha.rows[0].comentario,
+                criadoEm: minha.rows[0].criado_em
+            }
+        });
+    } catch (erro) {
+        console.error('Erro ao verificar avaliação do usuário:', erro);
+        return res.status(500).json({ mensagem: 'Não foi possível verificar sua avaliação.' });
+    }
+});
+
+app.post('/produtos/:id/avaliacoes', limitadorCadastro, autenticarToken, async (req, res) => {
+    const id = Number(req.params.id);
+
+    if (!Number.isInteger(id) || id <= 0) {
+        return res.status(400).json({ mensagem: 'Identificador inválido.' });
+    }
+
+    const nota = Number(req.body && req.body.nota);
+    const titulo = String((req.body && req.body.titulo) || '').trim().slice(0, 120);
+    const comentario = String((req.body && req.body.comentario) || '').trim().slice(0, 2000);
+
+    if (!Number.isInteger(nota) || nota < 1 || nota > 5) {
+        return res.status(400).json({ mensagem: 'A nota precisa ser um número inteiro de 1 a 5.' });
+    }
+
+    try {
+        const existe = await pool.query('SELECT 1 FROM produtos WHERE id = $1 AND ativo = TRUE', [id]);
+
+        if (existe.rowCount === 0) {
+            return res.status(404).json({ mensagem: 'Produto não encontrado.' });
+        }
+
+        // A checagem de compra é do servidor. Um cliente adulterado que poste
+        // direto no endpoint esbarra aqui.
+        if (!(await comprouOProduto(req.usuario.id, id))) {
+            return res.status(403).json({
+                mensagem: 'Só quem comprou este produto pode avaliá-lo.'
+            });
+        }
+
+        // Reenviar substitui a avaliação anterior: a constraint UNIQUE impede
+        // que a mesma pessoa acumule várias no mesmo produto.
+        // O nome vem do banco, não do token: req.usuario só carrega id e email,
+        // e devolver o e-mail aqui o exibiria como autor na página pública.
+        const resultado = await pool.query(
+            `WITH gravada AS (
+                INSERT INTO avaliacoes (produto_id, usuario_id, nota, titulo, comentario)
+                VALUES ($1, $2, $3, $4, $5)
+                ON CONFLICT (produto_id, usuario_id) DO UPDATE SET
+                    nota = EXCLUDED.nota,
+                    titulo = EXCLUDED.titulo,
+                    comentario = EXCLUDED.comentario,
+                    atualizado_em = CURRENT_TIMESTAMP
+                RETURNING id, usuario_id, nota, titulo, comentario, criado_em, atualizado_em
+            )
+            SELECT g.id, g.nota, g.titulo, g.comentario, g.criado_em, g.atualizado_em,
+                   u.nome AS usuario_nome
+              FROM gravada g JOIN usuarios u ON u.id = g.usuario_id`,
+            [id, req.usuario.id, nota, titulo, comentario]
+        );
+
+        return res.status(201).json({
+            mensagem: 'Avaliação registrada.',
+            avaliacao: serializarAvaliacao(resultado.rows[0]),
+            resumo: await resumoDeAvaliacoes(id)
+        });
+    } catch (erro) {
+        console.error('Erro ao registrar avaliação:', erro);
+        return res.status(500).json({ mensagem: 'Não foi possível registrar sua avaliação.' });
+    }
+});
+
+app.delete('/produtos/:id/avaliacoes/minha', autenticarToken, async (req, res) => {
+    const id = Number(req.params.id);
+
+    if (!Number.isInteger(id) || id <= 0) {
+        return res.status(400).json({ mensagem: 'Identificador inválido.' });
+    }
+
+    try {
+        const resultado = await pool.query(
+            'DELETE FROM avaliacoes WHERE produto_id = $1 AND usuario_id = $2 RETURNING id',
+            [id, req.usuario.id]
+        );
+
+        if (resultado.rowCount === 0) {
+            return res.status(404).json({ mensagem: 'Você não tem avaliação neste produto.' });
+        }
+
+        return res.json({ mensagem: 'Avaliação removida.', resumo: await resumoDeAvaliacoes(id) });
+    } catch (erro) {
+        console.error('Erro ao remover avaliação:', erro);
+        return res.status(500).json({ mensagem: 'Não foi possível remover sua avaliação.' });
+    }
+});
+
+// Troca a galeria inteira pela lista recebida. Substituir é mais simples que
+// reconciliar e evita ordem inconsistente: a posição vem do índice do array.
+async function substituirGaleria(produtoId, urls, executor) {
+    await executor.query('DELETE FROM produto_imagens WHERE produto_id = $1', [produtoId]);
+
+    for (let i = 0; i < urls.length; i += 1) {
+        await executor.query(
+            'INSERT INTO produto_imagens (produto_id, url, posicao) VALUES ($1, $2, $3)',
+            [produtoId, urls[i], i]
+        );
+    }
+}
+
+async function lerGaleria(produtoId, executor = pool) {
+    const resultado = await executor.query(
+        'SELECT url FROM produto_imagens WHERE produto_id = $1 ORDER BY posicao, id',
+        [produtoId]
+    );
+    return resultado.rows.map((linha) => linha.url);
+}
+
 function serializarProduto(linha) {
     return {
         id: linha.id,
         nome: linha.nome,
         descricao: linha.descricao,
         preco: Number(linha.preco),
+        precoOriginal: linha.preco_original === null || linha.preco_original === undefined
+            ? null
+            : Number(linha.preco_original),
+        especificacoes: Array.isArray(linha.especificacoes) ? linha.especificacoes : [],
         categoria: linha.categoria,
         imagemUrl: linha.imagem_url,
         estoque: linha.estoque,
@@ -1297,9 +1778,14 @@ function serializarProduto(linha) {
 app.get('/admin/produtos', limitadorAdmin, autenticarToken, exigirAdmin, async (req, res) => {
     try {
         const resultado = await pool.query(
-            `SELECT p.id, p.nome, p.descricao, p.preco, p.categoria, p.imagem_url,
-                    p.estoque, p.ativo, p.tags, p.criado_em, p.atualizado_em,
-                    COALESCE(SUM(i.quantidade) FILTER (WHERE ped.status = 'Pago'), 0)::int AS vendidos
+            `SELECT p.id, p.nome, p.descricao, p.preco, p.preco_original, p.categoria, p.imagem_url,
+                    p.estoque, p.ativo, p.tags, p.especificacoes, p.criado_em, p.atualizado_em,
+                    COALESCE(SUM(i.quantidade) FILTER (WHERE ped.status = 'Pago'), 0)::int AS vendidos,
+                    COALESCE(
+                        (SELECT array_agg(img.url ORDER BY img.posicao, img.id)
+                           FROM produto_imagens img WHERE img.produto_id = p.id),
+                        ARRAY[]::text[]
+                    ) AS imagens
              FROM produtos p
              LEFT JOIN pedido_itens i ON i.produto_id = p.id
              LEFT JOIN pedidos ped ON ped.id = i.pedido_id
@@ -1308,7 +1794,11 @@ app.get('/admin/produtos', limitadorAdmin, autenticarToken, exigirAdmin, async (
         );
 
         return res.json({
-            produtos: resultado.rows.map((linha) => ({ ...serializarProduto(linha), vendidos: linha.vendidos })),
+            produtos: resultado.rows.map((linha) => ({
+                ...serializarProduto(linha),
+                vendidos: linha.vendidos,
+                imagens: linha.imagens || []
+            })),
             categorias: CATEGORIAS
         });
     } catch (erro) {
@@ -1326,23 +1816,47 @@ app.post('/admin/produtos', limitadorAdmin, autenticarToken, exigirAdmin, async 
 
     const d = validacao.dados;
 
+    // Produto e galeria numa transação: gravar o produto e falhar nas imagens
+    // deixaria um cadastro pela metade sem ninguém perceber.
+    const client = await pool.connect();
+
     try {
-        const resultado = await pool.query(
-            `INSERT INTO produtos (nome, descricao, preco, categoria, imagem_url, estoque, ativo, tags)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+        await client.query('BEGIN');
+
+        const resultado = await client.query(
+            `INSERT INTO produtos (nome, descricao, preco, preco_original, categoria, imagem_url,
+                                   estoque, ativo, tags, especificacoes)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::jsonb)
              RETURNING *`,
-            [d.nome, d.descricao, d.preco, d.categoria, d.imagemUrl, d.estoque, d.ativo, d.tags]
+            [d.nome, d.descricao, d.preco, d.precoOriginal, d.categoria, d.imagemUrl,
+             d.estoque, d.ativo, d.tags, JSON.stringify(d.especificacoes || [])]
         );
 
+        const produto = resultado.rows[0];
+
+        if (d.imagens) {
+            await substituirGaleria(produto.id, d.imagens, client);
+        }
+
+        await client.query('COMMIT');
+
         console.log(`[ADMIN] Usuário ${req.usuario.id} criou o produto "${d.nome}".`);
-        return res.status(201).json({ mensagem: 'Produto criado.', produto: serializarProduto(resultado.rows[0]) });
+
+        return res.status(201).json({
+            mensagem: 'Produto criado.',
+            produto: { ...serializarProduto(produto), imagens: d.imagens || [] }
+        });
     } catch (erro) {
+        await client.query('ROLLBACK').catch(() => {});
+
         if (erro.code === '23505') {
             return res.status(409).json({ mensagem: 'Já existe um produto com esse nome.' });
         }
 
         console.error('Erro ao criar produto:', erro);
         return res.status(500).json({ mensagem: 'Não foi possível criar o produto.' });
+    } finally {
+        client.release();
     }
 });
 
@@ -1359,54 +1873,108 @@ app.put('/admin/produtos/:id', limitadorAdmin, autenticarToken, exigirAdmin, asy
         return res.status(400).json({ mensagem: validacao.erros[0], erros: validacao.erros });
     }
 
+    const d = validacao.dados;
+
     const colunas = {
         nome: 'nome',
         descricao: 'descricao',
         preco: 'preco',
+        precoOriginal: 'preco_original',
         categoria: 'categoria',
         imagemUrl: 'imagem_url',
         estoque: 'estoque',
         ativo: 'ativo',
-        tags: 'tags'
+        tags: 'tags',
+        especificacoes: 'especificacoes'
     };
 
     const atribuicoes = [];
     const valores = [];
 
     for (const [campo, coluna] of Object.entries(colunas)) {
-        if (validacao.dados[campo] !== undefined) {
-            valores.push(validacao.dados[campo]);
-            atribuicoes.push(`${coluna} = $${valores.length}`);
+        if (d[campo] === undefined) continue;
+
+        // jsonb precisa de texto com cast: o driver mandaria um array do
+        // Postgres, que a coluna recusa.
+        if (campo === 'especificacoes') {
+            valores.push(JSON.stringify(d[campo]));
+            atribuicoes.push(`${coluna} = $${valores.length}::jsonb`);
+            continue;
         }
+
+        valores.push(d[campo]);
+        atribuicoes.push(`${coluna} = $${valores.length}`);
     }
 
-    if (atribuicoes.length === 0) {
+    if (atribuicoes.length === 0 && d.imagens === undefined) {
         return res.status(400).json({ mensagem: 'Nenhum campo para atualizar.' });
     }
 
-    valores.push(id);
+    const client = await pool.connect();
 
     try {
-        const resultado = await pool.query(
-            `UPDATE produtos SET ${atribuicoes.join(', ')}, atualizado_em = CURRENT_TIMESTAMP
-             WHERE id = $${valores.length}
-             RETURNING *`,
-            valores
-        );
+        await client.query('BEGIN');
 
-        if (resultado.rowCount === 0) {
+        const atual = await client.query('SELECT preco, preco_original FROM produtos WHERE id = $1 FOR UPDATE', [id]);
+
+        if (atual.rowCount === 0) {
+            await client.query('ROLLBACK');
             return res.status(404).json({ mensagem: 'Produto não encontrado.' });
         }
 
-        console.log(`[ADMIN] Usuário ${req.usuario.id} editou o produto ${id}: ${atribuicoes.join(', ')}.`);
-        return res.json({ mensagem: 'Produto atualizado.', produto: serializarProduto(resultado.rows[0]) });
+        // Numa edição parcial, só um dos dois preços costuma vir. Sem comparar
+        // com o valor já gravado, dava para deixar um desconto inválido no ar.
+        const precoDepois = d.preco !== undefined ? d.preco : Number(atual.rows[0].preco);
+        const originalDepois = d.precoOriginal !== undefined
+            ? d.precoOriginal
+            : (atual.rows[0].preco_original === null ? null : Number(atual.rows[0].preco_original));
+
+        if (originalDepois !== null && originalDepois <= precoDepois) {
+            await client.query('ROLLBACK');
+            return res.status(400).json({
+                mensagem: 'O preço original precisa ser maior que o preço atual para valer como desconto.'
+            });
+        }
+
+        let produto;
+
+        if (atribuicoes.length > 0) {
+            valores.push(id);
+            const resultado = await client.query(
+                `UPDATE produtos SET ${atribuicoes.join(', ')}, atualizado_em = CURRENT_TIMESTAMP
+                 WHERE id = $${valores.length}
+                 RETURNING *`,
+                valores
+            );
+            produto = resultado.rows[0];
+        } else {
+            produto = (await client.query('SELECT * FROM produtos WHERE id = $1', [id])).rows[0];
+        }
+
+        if (d.imagens !== undefined) {
+            await substituirGaleria(id, d.imagens, client);
+        }
+
+        const galeria = await lerGaleria(id, client);
+        await client.query('COMMIT');
+
+        console.log(`[ADMIN] Usuário ${req.usuario.id} editou o produto ${id}.`);
+
+        return res.json({
+            mensagem: 'Produto atualizado.',
+            produto: { ...serializarProduto(produto), imagens: galeria }
+        });
     } catch (erro) {
+        await client.query('ROLLBACK').catch(() => {});
+
         if (erro.code === '23505') {
             return res.status(409).json({ mensagem: 'Já existe um produto com esse nome.' });
         }
 
         console.error('Erro ao atualizar produto:', erro);
         return res.status(500).json({ mensagem: 'Não foi possível atualizar o produto.' });
+    } finally {
+        client.release();
     }
 });
 

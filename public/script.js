@@ -448,6 +448,21 @@ async function renderCartPage() {
     }
 }
 
+// Estrelas do cartão da vitrine. SVG em vez do caractere ★, que muda de
+// desenho conforme a fonte instalada. A página de produto tem sua própria
+// versão, com rótulo acessível mais detalhado.
+function estrelasSimples(nota) {
+    const cheias = Math.round(Number(nota) || 0);
+    let saida = `<span class="estrelas" role="img" aria-label="Nota ${Number(nota).toFixed(1)} de 5">`;
+
+    for (let i = 1; i <= 5; i += 1) {
+        saida += `<svg viewBox="0 0 24 24" aria-hidden="true"><path class="${i <= cheias ? 'cheia' : 'vazia'}"`
+            + ' d="M12 2l2.9 6.3 6.9.8-5.1 4.7 1.4 6.8L12 17.3 5.9 20.6l1.4-6.8L2.2 9.1l6.9-.8z"/></svg>';
+    }
+
+    return `${saida}</span>`;
+}
+
 // O banco guarda o slug ("perifericos"); quem aparece na tela é o rótulo
 // ("Periféricos"), que vem junto da API.
 function rotuloCategoria(slug) {
@@ -515,17 +530,33 @@ async function renderProductGrid() {
                     : '<span class="estoque estoque-ok">Em estoque</span>';
             }
 
+            const nota = produto.totalAvaliacoes > 0
+                ? `<div class="nota-linha">${estrelasSimples(produto.notaMedia)}
+                     <span class="valor">${produto.notaMedia.toFixed(1)}</span>
+                     <span>(${produto.totalAvaliacoes})</span></div>`
+                : '<div class="nota-linha vazia">Sem avaliações</div>';
+
+            const precoAntigo = produto.precoOriginal && produto.precoOriginal > produto.preco
+                ? `<span class="preco-antigo">${formatCurrency(produto.precoOriginal)}</span>`
+                : '';
+
+            const enderecoProduto = `produto.html?id=${produto.id}`;
+
             return `
                 <article class="produto" data-category="${escapeHtml(produto.categoria)}">
-                    <div class="produto-foto">
+                    <a class="produto-foto" href="${enderecoProduto}" aria-label="Ver ${escapeHtml(produto.nome)}">
                         <span class="produto-chip">${escapeHtml(rotuloCategoria(produto.categoria))}</span>
                         ${foto}
-                    </div>
+                    </a>
                     <div class="produto-corpo">
-                        <h3 class="produto-nome">${escapeHtml(produto.nome)}</h3>
+                        <h3 class="produto-nome">
+                            <a href="${enderecoProduto}">${escapeHtml(produto.nome)}</a>
+                        </h3>
                         <p class="produto-desc">${escapeHtml(produto.descricao)}</p>
+                        ${nota}
                         ${estoque}
                         <div class="produto-preco">
+                            ${precoAntigo}
                             <span class="valor">${formatCurrency(produto.preco)}</span>
                             <span class="parcelas">ou 12x de ${formatCurrency(produto.preco / 12)} sem juros</span>
                         </div>
