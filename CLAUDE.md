@@ -4,8 +4,16 @@ Loja de tecnologia e eletrônicos. Este arquivo existe para que o raciocínio po
 trás das decisões sobreviva à troca de contexto: se você está lendo isto sem ter
 acompanhado o histórico, comece por aqui.
 
+O companheiro dele é o [`DATABASE.md`](DATABASE.md), que descreve as tabelas
+coluna a coluna, a taxonomia de categorias, as 7 migrations e como criar o
+primeiro administrador. Aqui ficam as decisões e o porquê; lá, o schema.
+
 **Repositório:** https://github.com/Carl0sNeto/petabyte (público)
-**Última revisão deste documento:** 17/08/2026
+**Última revisão deste documento:** 14/09/2026, conferida item a item contra o
+código, o git e o disco.
+
+> A data acima já ficou parada em 17/08 enquanto o corpo do arquivo era alterado
+> em 22/08 e 09/09. Se você mexer neste documento, mexa nesta linha junto.
 
 ---
 
@@ -13,7 +21,7 @@ acompanhado o histórico, comece por aqui.
 
 | Camada | Tecnologia |
 |--------|------------|
-| Servidor | Node.js + Express 5, arquivo único `server.js` |
+| Servidor | Node.js 24 + Express 5, arquivo único `server.js` (~2.460 linhas) |
 | Banco | PostgreSQL, acesso via `pg` sem ORM |
 | Front-end | HTML + CSS + JavaScript puro, sem framework nem build |
 | Pagamento | Mercado Pago (Checkout Pro, por redirecionamento) |
@@ -22,11 +30,15 @@ acompanhado o histórico, comece por aqui.
 
 Não há etapa de build. Os arquivos em `public/` são servidos como estão.
 
+A versão do Node está fixada em `engines: { node: "24.x" }` no `package.json`,
+para que o Render não escolha outra por conta própria entre um deploy e o
+seguinte.
+
 ## Comandos
 
 ```bash
 npm start           # sobe na porta 3000
-npm test            # 41 testes, em série, contra o banco real
+npm test            # 66 casos, em série, contra o banco real
 npm run migrate     # aplica migrations/*.sql em ordem
 npm run criar-admin -- email@exemplo.com    # promove uma conta a administrador
 ```
@@ -39,6 +51,9 @@ npm run criar-admin -- email@exemplo.com    # promove uma conta a administrador
   cada arquivo precisa poder ser executado de novo sem efeito colateral.
 - **Comentário explica o porquê, não o quê.** Vários trechos do código carregam
   a razão da decisão, porque ela não é óbvia pela leitura.
+- **Commit sem mudança real usa `git commit --allow-empty`.** O `.env.example`
+  já carregou um comentário inventado só para o arquivo ficar sujo e o commit
+  passar; foi limpo em 22/08. Não repita o contorno.
 
 ---
 
@@ -106,9 +121,13 @@ devolve `false` em 1 milissegundo sem perguntar nada.
 Isso já causou um bug real: o botão Excluir do painel não fazia absolutamente
 nada, sem erro nem mensagem, porque o código lia esse `false` como cancelamento.
 
-O painel usa `confirmar()`, baseado no elemento `<dialog>`. **Pendência
-conhecida:** a loja ainda tem 19 chamadas a `alert()` em `public/script.js`,
-sujeitas ao mesmo problema.
+O painel usa `confirmar()`, baseado no elemento `<dialog>`. As páginas escritas
+depois seguiram a regra: `admin.js`, `produto.js` e `conta.js` têm **zero**
+chamadas a `alert()` — `conta.js` avisa pela caixa `#avisoConta` na própria
+página.
+
+**Pendência conhecida:** `public/script.js` ainda tem 19 chamadas a `alert()`,
+sujeitas ao mesmo problema. É o único arquivo que falta converter.
 
 ### Só quem comprou avalia
 
@@ -119,6 +138,13 @@ POST é aceito — um cliente adulterado que poste direto no endpoint recebe 403
 O autor é exibido abreviado (`João S.`), nunca o nome completo nem o e-mail.
 A constraint `UNIQUE (produto_id, usuario_id)` faz o reenvio substituir a
 avaliação anterior em vez de acumular.
+
+São cinco rotas: `GET /produtos/:id/avaliacoes` (lista pública),
+`GET /produtos/:id/avaliacoes/minha` (para o formulário vir preenchido),
+`POST` e `DELETE /produtos/:id/avaliacoes/minha`, e `GET /auth/me/avaliacoes`,
+que alimenta a aba da central da conta. A última traz o produto junto, e devolve
+`ativo` para que um item tirado do catálogo continue listado — sem link, mas
+sem sumir do histórico de quem escreveu.
 
 > Consequência do deploy de demonstração: com `CHECKOUT_HABILITADO=false`
 > ninguém consegue comprar, logo ninguém consegue avaliar. A página avisa isso
@@ -178,7 +204,13 @@ que o rate limit em memória vira decorativo. No Render, `npm start` roda como
 foi escrito.
 
 O `render.yaml` na raiz descreve serviço e banco. No painel: **New > Blueprint**,
-apontando para o repositório.
+apontando para o repositório. O `healthCheckPath` aponta para `GET /health`, que
+é rota do próprio `server.js` — se ela mudar de caminho, o Render passa a
+considerar o serviço morto e reinicia em loop.
+
+`/health` responde `{ status: 'ok' }` sem encostar no banco. É proposital: mede
+se o processo está vivo, não se o Postgres está de pé. Consequência a ter em
+mente — **com o banco fora, o health check continua verde**.
 
 ### Variáveis que o deploy usa
 
@@ -222,6 +254,19 @@ idempotente, então repetir a cada deploy é seguro.
 
 São **de integração**: batem no banco configurado no `.env`, não em mocks.
 
+Cinco arquivos, cada um com um `test()` de nível superior e os casos como
+subtestes (`await t.test(...)`):
+
+| Arquivo | Casos | Cobre |
+|---------|-------|-------|
+| `tests/admin.test.js` | 18 | Rotas `/admin/*`, permissão, CRUD de produto, tags, paginação |
+| `tests/produto.test.js` | 13 | Página de detalhe, galeria, avaliações e quem pode avaliar |
+| `tests/checkout.test.js` | 12 | Resolução do carrinho, preço do banco, estoque, frete |
+| `tests/conta.test.js` | 10 | Central da conta: nome, troca de senha, avaliações próprias |
+| `tests/estoque.test.js` | 8 | Baixa, idempotência, devolução por estorno |
+
+São 61 subtestes mais os 5 de nível superior — daí os 66 que o runner conta.
+
 - Rodam em série (`--test-concurrency=1`).
 - As fixtures usam prefixo com o **pid do processo**. O runner do Node executa
   cada arquivo em um processo separado; com prefixo comum, o `limpar()` de um
@@ -237,9 +282,17 @@ falha que originou boa parte deste projeto.
 
 ## Front-end
 
+São sete páginas: `E-Commerce.html` (vitrine, servida como índice), `cart.html`,
+`produto.html`, `auth.html`, `redefinir-senha.html`, `perfil.html` e
+`admin.html`.
+
 - `public/produto.html` + `produto.js` — página de detalhe, aberta pela vitrine
   em `produto.html?id=N`. Carrega **depois** de `script.js`, de quem reaproveita
   `apiUrl`, `escapeHtml`, `formatCurrency` e `addToCart`.
+- `public/perfil.html` + `conta.js` — central da conta, em três abas dentro da
+  mesma página (Minhas compras, Minhas avaliações, Configurações). Também carrega
+  **depois** de `script.js`, reaproveitando `apiUrl`, `lerResposta`,
+  `escapeHtml`, `iniciaisDoNome`, `hasValidSession` e `logoutUser`.
 - Estrelas são SVG inline, não o caractere `★`: o glifo muda de desenho conforme
   a fonte instalada e não existe meia estrela em texto.
 - `public/estilos.css` — sistema de design compartilhado por todas as páginas.
@@ -273,19 +326,48 @@ caracteres; `UNIQUE` em `usuarios.email`.
 
 1. **19 `alert()` na loja** (`public/script.js`) — mesmo bug de supressão que
    quebrou o botão Excluir. Afeta mensagens de carrinho vazio, falha de
-   pagamento e confirmação de compra.
-2. **`MP_WEBHOOK_SECRET` ausente do `.env`** — a variável nem existe no arquivo,
-   então o webhook aceita notificações sem verificar assinatura. O código da
-   validação HMAC já está pronto; falta só preencher com o segredo do painel do
-   Mercado Pago.
+   pagamento e confirmação de compra. Único arquivo que falta; os outros três
+   já usam aviso na página.
+2. **`MP_WEBHOOK_SECRET` vazio no `.env`** — a variável já está documentada no
+   `.env.example` (linhas 31-34), mas o `.env` local sequer a declara, então o
+   webhook aceita notificações sem verificar assinatura. O código da validação
+   HMAC está pronto; falta preencher com o segredo do painel do Mercado Pago.
 3. **`.env.bak` no disco** com o `JWT_SECRET` antigo comprometido. Está fora do
-   Git, mas deveria ser apagado.
-4. **Push protection do GitHub** — recomendada, nunca confirmada.
-5. **Branches mescladas** `feat/painel-admin` e `melhorias/catalogo-seguro`
-   ainda existem, local e remotamente.
-6. **`.env.example` linha 20** tem um comentário residual de contorno
-   (`#Apenas alteração para que eu consiga fazer commit`). Para commit sem
-   mudanças reais, use `git commit --allow-empty`.
+   Git (o `.gitignore` cobre `.env.*` com exceção do `.example`), mas deveria
+   ser apagado.
+4. **Push protection do GitHub** — recomendada, nunca confirmada. Não dá para
+   verificar pelo repositório local; é preciso olhar em Settings > Code security.
+5. **Branches mescladas sobrando.** O estado hoje:
+
+   | Branch | Local | No `origin` |
+   |--------|-------|-------------|
+   | `feat/painel-admin` | sim | sim |
+   | `feat/pagina-de-produto` | sim | sim |
+   | `feat/central-da-conta` | sim | sim |
+   | `melhorias/catalogo-seguro` | sim | **não** (já removida) |
+   | `fix/dependencias-vulneraveis` | sim | **não** |
+
+   Todas já estão em `main`. Apagar é seguro, mas confirme com `git branch
+   --merged main` antes.
+6. **Andaimes de depuração que sobraram.** Dois, ambos do início do projeto:
+   - `trigger-request.js` na raiz — dispara um POST em `/auth/recuperar-senha`
+     com e-mail fixo. Não é chamado por nada nem aparece em `npm run`.
+   - `POST /debug/teste` em `server.js:1176` — ecoa o corpo recebido. Fica atrás
+     de `NODE_ENV !== 'production'`, então **não** existe no Render, mas responde
+     em qualquer execução local.
+
+   Nenhum dos dois é falha de segurança hoje. São candidatos a remoção, ou a
+   virar teste de verdade.
+
+**Resolvidas desde a última revisão**, mantidas aqui para não serem reabertas:
+
+- O comentário residual na linha 20 do `.env.example` saiu; a linha hoje é
+  `CHECKOUT_HABILITADO=true`.
+- `MP_WEBHOOK_SECRET` passou a constar do `.env.example`, com instrução de onde
+  buscar o valor. Só o preenchimento continua pendente.
+- `package.json` teve o campo `main` corrigido (apontava para arquivo
+  inexistente) e `qs` e `nodemailer` foram atualizados para versões sem
+  vulnerabilidade conhecida.
 
 > O catálogo é editado pelo painel e muda com frequência. Confira o estado real
 > no banco antes de afirmar quantidades — não confie em números escritos aqui.
