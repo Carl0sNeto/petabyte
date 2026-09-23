@@ -10,6 +10,12 @@ O projeto Petabyte utiliza as seguintes configurações de conexão:
 - **Senha**: `PGPASSWORD`
 - **Banco de dados**: `PGDATABASE`
 
+As `PG*` acima valem para o Postgres **local**. Se `DATABASE_URL` estiver
+definida, ela tem precedência e as `PG*` são ignoradas por completo — é assim
+que o deploy funciona, com o banco no Neon. A divisão Render (processo) + Neon
+(banco), o motivo de usar o endpoint `-pooler` e a precedência do `sslmode` sobre
+`DATABASE_SSL` estão no [`CLAUDE.md`](CLAUDE.md), seção *Deploy*.
+
 Também são esperadas estas variáveis para o checkout:
 - `JWT_SECRET` (**obrigatória**, mínimo de 32 caracteres — o servidor não inicia sem ela)
 - `APP_BASE_URL`
@@ -171,6 +177,18 @@ idempotentes e podem ser executadas mais de uma vez:
 ```bash
 npm run migrate
 ```
+
+Num banco **novo e vazio** — caso do Neon recém-criado — o mesmo comando serve
+para montar tudo do zero: o runner aplica `inicializar_banco.sql` antes das
+migrations. Para apontar da sua máquina para o banco da hospedagem, defina a
+`DATABASE_URL` na mesma linha, sem gravá-la em arquivo (PowerShell):
+
+```powershell
+$env:DATABASE_URL="postgresql://..."; npm run migrate
+```
+
+No deploy isso já acontece sozinho: o `startCommand` do `render.yaml` roda
+`npm run migrate` antes do `npm start`.
 
 | Arquivo | O que faz |
 |---------|-----------|

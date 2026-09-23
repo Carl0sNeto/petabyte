@@ -130,7 +130,16 @@ async function principal() {
         }
 
         if (/SSL|self signed|certificate/i.test(erro.message || '')) {
-            console.error('   -> Parece problema de TLS. Tente inverter DATABASE_SSL (true/false).');
+            console.error('   -> Parece problema de TLS.');
+
+            // Mexer em DATABASE_SSL não adianta quando a URL traz sslmode: o
+            // valor da URL tem precedência e a variável é ignorada.
+            if (/[?&]sslmode=/.test(process.env.DATABASE_URL || '')) {
+                console.error('      A DATABASE_URL traz sslmode, que manda no TLS e ignora DATABASE_SSL.');
+                console.error('      Ajuste o sslmode na propria URL (verify-full, require, disable).');
+            } else {
+                console.error('      Tente inverter DATABASE_SSL (true/false).');
+            }
         }
     }
 

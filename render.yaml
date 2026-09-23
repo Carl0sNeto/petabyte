@@ -1,18 +1,12 @@
 # Blueprint do Render — https://render.com/docs/blueprint-spec
 #
-# Descreve o serviço e o banco. No painel do Render: New > Blueprint, aponte
-# para este repositório, e ele cria os dois já conectados.
+# Descreve apenas o serviço web. O banco fica no Neon, fora deste arquivo:
+# o Postgres gerenciado do Render expirava em 30 dias no free tier, e o do Neon
+# não expira. No painel do Render: New > Blueprint, aponte para este repositório.
 #
 # Este é um deploy de demonstração: CHECKOUT_HABILITADO fica em false e não há
 # credenciais do Mercado Pago. A loja funciona para navegar, montar carrinho,
 # criar conta e usar o painel — só a finalização de compra está desligada.
-
-databases:
-  - name: petabyte-db
-    databaseName: petabyte
-    plan: free
-    # O free tier do Render expira o banco após 30 dias. Para um projeto de
-    # hobby, basta recriar; as migrations reconstroem o schema do zero.
 
 services:
   - type: web
@@ -26,14 +20,20 @@ services:
     healthCheckPath: /health
 
     envVars:
-      # Conexão com o banco acima. A URL interna dispensa TLS por ficar na
-      # rede privada do Render, e é mais rápida que a externa.
+      # String de conexão do Neon, colada à mão no painel do Render. Traz
+      # usuário e senha dentro dela, então NUNCA entra neste arquivo: o
+      # repositório é público. Use o endpoint com "-pooler" no nome — o Render
+      # abre e fecha conexões a cada wake-up do free tier, e o pooler do Neon
+      # absorve isso sem estourar o limite de conexões diretas.
+      #
+      # Prefira terminar a URL com ?sslmode=verify-full em vez de
+      # ?sslmode=require: hoje o pg trata os dois igual, mas a partir do pg 9 o
+      # "require" passa a significar TLS sem verificar certificado.
+      #
+      # Não defina DATABASE_SSL aqui. Quando a URL traz sslmode, é ele que vale;
+      # a variável vira decorativa. Ela só existe para URLs sem sslmode.
       - key: DATABASE_URL
-        fromDatabase:
-          name: petabyte-db
-          property: connectionString
-      - key: DATABASE_SSL
-        value: "false"
+        sync: false
 
       # Gerado pelo Render no primeiro deploy. Fica só no painel, nunca no Git.
       - key: JWT_SECRET
