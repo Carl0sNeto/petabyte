@@ -120,8 +120,9 @@ function configuracaoDoBanco() {
     if (process.env.DATABASE_URL) {
         return {
             connectionString: process.env.DATABASE_URL,
-            // A URL externa do Render exige TLS. Se o serviço e o banco estão na
-            // mesma região, a URL interna dispensa: use DATABASE_SSL=false.
+            // Só vale para URL SEM sslmode. O Neon manda ?sslmode=... na string,
+            // e aí o pg ignora esta opção: o sslmode da URL tem precedência.
+            // Para desligar TLS de verdade, tire o sslmode da URL também.
             ssl: process.env.DATABASE_SSL === 'false' ? false : { rejectUnauthorized: false }
         };
     }

@@ -9,8 +9,7 @@ coluna a coluna, a taxonomia de categorias, as 7 migrations e como criar o
 primeiro administrador. Aqui ficam as decisões e o porquê; lá, o schema.
 
 **Repositório:** https://github.com/Carl0sNeto/petabyte (público)
-**Última revisão deste documento:** 14/09/2026, conferida item a item contra o
-código, o git e o disco.
+**Última revisão deste documento:** 22/09/2026 (migração do banco para o Neon).
 
 > A data acima já ficou parada em 17/08 enquanto o corpo do arquivo era alterado
 > em 22/08 e 09/09. Se você mexer neste documento, mexa nesta linha junto.
@@ -193,9 +192,14 @@ errado. Para testes paralelos, use portas alternativas (3100, 3200).
 
 ---
 
-## Deploy (Render)
+## Deploy (Render + Neon)
 
 Deploy de **demonstração**: a loja fica navegável, mas a compra não conclui.
+
+**A divisão desde 22/09/2026:** o Render roda o processo Node; o **Neon** guarda
+o Postgres. O banco gerenciado do Render expirava em 30 dias no free tier e
+expirou de fato — o do Neon não tem prazo. O Neon **não hospeda o site**, só o
+banco; quem serve HTTP continua sendo o Render.
 
 **Por que Render e não Vercel.** A Vercel roda funções serverless efêmeras;
 este app assume processo vivo. Lá seria preciso exportar handler, trocar o pool
@@ -203,10 +207,38 @@ por um driver com pooler, tirar `inicializarBanco()` do caminho quente e aceitar
 que o rate limit em memória vira decorativo. No Render, `npm start` roda como
 foi escrito.
 
-O `render.yaml` na raiz descreve serviço e banco. No painel: **New > Blueprint**,
-apontando para o repositório. O `healthCheckPath` aponta para `GET /health`, que
-é rota do próprio `server.js` — se ela mudar de caminho, o Render passa a
-considerar o serviço morto e reinicia em loop.
+O `render.yaml` na raiz descreve **apenas o serviço web** — o bloco `databases:`
+saiu junto com o banco do Render. No painel: **New > Blueprint**, apontando para
+o repositório. O `healthCheckPath` aponta para `GET /health`, que é rota do
+próprio `server.js` — se ela mudar de caminho, o Render passa a considerar o
+serviço morto e reinicia em loop.
+
+### Use o endpoint com `-pooler`
+
+A string do Neon vem em duas variantes, com e sem `-pooler` no host. Use a **com
+pooler**. O free tier do Render dorme por inatividade, e cada wake-up reabre o
+pool inteiro de uma vez; contra o endpoint direto isso encosta no teto de
+conexões do Neon. O pooler existe exatamente para absorver esse padrão.
+
+### `sslmode` na URL manda, e `DATABASE_SSL` vira decorativa
+
+Descoberto ao migrar, e não é óbvio: quando a `DATABASE_URL` traz `sslmode=`,
+o `pg` usa esse valor e **ignora** o que `configuracaoDoBanco()` passa em `ssl`.
+Testado com `pg` 8.22 — com `sslmode=require` na URL, o `ssl` efetivo é o mesmo
+com `DATABASE_SSL=false` ou sem a variável.
+
+Consequência prática: para mexer no TLS do deploy, edite o `sslmode` da própria
+URL. `DATABASE_SSL` só tem efeito em URL que não traz `sslmode`, e por isso nem
+aparece mais no `render.yaml`.
+
+> Prefira `sslmode=verify-full` a `sslmode=require`. Hoje o `pg` trata os dois
+> como verificação completa do certificado, mas avisa em log que no `pg` 9 o
+> `require` passa a adotar a semântica do libpq — TLS **sem** verificar
+> certificado. Escrever `verify-full` hoje trava o comportamento forte.
+
+O `channel_binding=require` que o Neon põe na string é parâmetro de libpq: o
+`pg` o carrega na configuração mas não o aplica como exigência. Não atrapalha,
+só não garante nada.
 
 `/health` responde `{ status: 'ok' }` sem encostar no banco. É proposital: mede
 se o processo está vivo, não se o Postgres está de pé. Consequência a ter em
@@ -216,12 +248,17 @@ mente — **com o banco fora, o health check continua verde**.
 
 | Variável | Papel |
 |----------|-------|
-| `DATABASE_URL` | Conexão do Postgres gerenciado. Tem precedência sobre as `PG*` |
-| `DATABASE_SSL` | `false` na URL interna do Render, que fica na rede privada |
+| `DATABASE_URL` | String do Neon, colada à mão no painel (`sync: false`). Tem precedência sobre as `PG*` |
 | `TRUST_PROXY` | `1` atrás de proxy. Sem isto o rate limit vê um IP só e bloqueia geral |
 | `CHECKOUT_HABILITADO` | `false` desliga o pagamento |
 | `APP_BASE_URL` | Preencher com a URL do Render após o primeiro deploy |
 | `JWT_SECRET` | Gerado pelo Render (`generateValue`), nunca versionado |
+
+`DATABASE_SSL` saiu da lista: com `sslmode` na URL do Neon, ela não faz nada.
+
+A `DATABASE_URL` carrega usuário e senha. Ela vive **só** no painel do Render e
+no `.env` local — nunca no `render.yaml`, que é público. É o mesmo tipo de
+descuido que causou o vazamento registrado em *Segurança — histórico*.
 
 ### Como o checkout desligado funciona
 
@@ -245,8 +282,15 @@ idempotente, então repetir a cada deploy é seguro.
 - O painel fica acessível em `/admin.html`. Os middlewares protegem, mas a senha
   da conta admin passa a ser o que separa qualquer pessoa do catálogo.
 - Não use credenciais de produção do Mercado Pago num deploy de hobby.
-- O free tier do Render dorme após inatividade (~30s para acordar) e o banco
-  gratuito expira em 30 dias. Recriar é indolor: as migrations refazem tudo.
+- O free tier do Render dorme após inatividade (~30s para acordar). O banco no
+  Neon não expira, mas o free tier dele também suspende o *compute* por
+  inatividade — a primeira consulta depois da pausa demora, e as duas esperas se
+  somam no primeiro acesso do dia.
+- Trocar de banco **não leva os dados**. O Postgres do Render expirou com o
+  catálogo, os pedidos e as contas dentro; o Neon subiu vazio. Rodar as
+  migrations recria o schema e o catálogo inicial, mas contas e pedidos antigos
+  não voltam, e o primeiro admin precisa ser promovido de novo
+  (`npm run criar-admin`).
 
 ---
 
