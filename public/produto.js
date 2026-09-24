@@ -1,7 +1,8 @@
 // Página de produto.
 //
-// Reaproveita de script.js: apiUrl, lerResposta, escapeHtml, formatCurrency,
-// addToCart, updateCartBadge e hasValidSession. Este arquivo carrega depois.
+// Reaproveita de sessao.js (apiUrl, lerResposta, hasValidSession) e de
+// script.js (escapeHtml, formatCurrency, addToCart, updateCartBadge,
+// renderDesconto). Este arquivo carrega depois dos dois.
 
 const parametros = new URLSearchParams(window.location.search);
 const PRODUTO_ID = Number(parametros.get('id'));

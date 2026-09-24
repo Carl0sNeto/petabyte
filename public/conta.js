@@ -1,7 +1,7 @@
 // Central da conta: compras, avaliações e configurações.
 //
-// Carrega depois de script.js, de quem reaproveita apiUrl, lerResposta,
-// escapeHtml, iniciaisDoNome, hasValidSession e logoutUser.
+// Carrega depois de sessao.js (chamarApi, hasValidSession, salvarUsuarioLocal,
+// encerrarSessaoLocal, logoutUser) e de script.js (escapeHtml, iniciaisDoNome).
 
 const SECOES = {
     compras: 'secaoCompras',
@@ -24,29 +24,6 @@ function avisarConta(texto, tipo = 'ok') {
 
     clearTimeout(timerAvisoConta);
     timerAvisoConta = setTimeout(() => caixa.classList.add('hidden'), 6000);
-}
-
-async function chamarConta(caminho, opcoes = {}) {
-    const token = localStorage.getItem('petabyte-token');
-
-    const resposta = await fetch(apiUrl(caminho), {
-        ...opcoes,
-        headers: {
-            'Content-Type': 'application/json',
-            Authorization: `Bearer ${token}`,
-            ...(opcoes.headers || {})
-        }
-    });
-
-    const dados = await lerResposta(resposta);
-
-    if (!resposta.ok) {
-        const falha = new Error(dados.mensagem || `Falha na requisição (${resposta.status}).`);
-        falha.status = resposta.status;
-        throw falha;
-    }
-
-    return dados;
 }
 
 // --------------------------------------------------------------------------
@@ -109,7 +86,7 @@ async function carregarMinhasAvaliacoes() {
     const caixa = document.getElementById('minhasAvaliacoes');
 
     try {
-        const dados = await chamarConta('/auth/me/avaliacoes');
+        const dados = await chamarApi('/auth/me/avaliacoes');
         const itens = dados.avaliacoes;
 
         document.getElementById('resumoMinhasAvaliacoes').textContent =
@@ -170,13 +147,13 @@ async function salvarDados(evento) {
     botao.disabled = true;
 
     try {
-        const dados = await chamarConta('/auth/me', { method: 'PUT', body: JSON.stringify({ nome }) });
+        const dados = await chamarApi('/auth/me', { method: 'PUT', body: JSON.stringify({ nome }) });
 
         usuarioAtual = dados.usuario;
 
         // O menu do cabeçalho lê do localStorage; sem atualizar, o avatar
         // continuaria mostrando as iniciais antigas até o próximo login.
-        localStorage.setItem('petabyte-user', JSON.stringify(dados.usuario));
+        salvarUsuarioLocal(dados.usuario);
 
         renderCabecalho(dados.usuario);
         renderMenuConta();
@@ -204,7 +181,7 @@ async function trocarSenha(evento) {
     botao.disabled = true;
 
     try {
-        const dados = await chamarConta('/auth/alterar-senha', {
+        const dados = await chamarApi('/auth/alterar-senha', {
             method: 'POST',
             body: JSON.stringify({ senhaAtual, novaSenha })
         });
@@ -229,7 +206,8 @@ async function iniciarConta() {
     }
 
     try {
-        const dados = await chamarConta('/auth/me');
+        // Sem redirecionar: esta página tem a própria tela de "sem sessão".
+        const dados = await chamarApi('/auth/me', { redirecionarSeDeslogado: false });
         usuarioAtual = dados.usuario;
 
         renderCabecalho(dados.usuario);
@@ -244,8 +222,7 @@ async function iniciarConta() {
         await carregarMinhasAvaliacoes();
     } catch (erro) {
         console.error(erro);
-        localStorage.removeItem('petabyte-token');
-        localStorage.removeItem('petabyte-user');
+        encerrarSessaoLocal();
         document.getElementById('semSessao').classList.remove('hidden');
     }
 }

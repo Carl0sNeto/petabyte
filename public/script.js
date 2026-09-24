@@ -1,53 +1,8 @@
+// Base da API, sessão e chamadas autenticadas (apiUrl, lerResposta,
+// getLoggedUser, hasValidSession, chamarApi, requisitar, logoutUser) vêm de
+// sessao.js, que carrega antes deste arquivo.
+
 const STORAGE_KEY = 'petabyte-cart';
-const AUTH_KEY = 'petabyte-user';
-function resolverApiBaseUrl() {
-    if (window.__PETABYTE_API_BASE_URL) {
-        return window.__PETABYTE_API_BASE_URL;
-    }
-
-    // Aberto direto do disco (file://) não há origem: assume o padrão local.
-    if (window.location.protocol === 'file:') {
-        return 'http://localhost:3000';
-    }
-
-    // Servido por HTTP, a API é sempre a mesma origem da página. Fixar :3000
-    // aqui quebrava qualquer porta alternativa (testes, staging, container).
-    return window.location.origin || 'http://localhost:3000';
-}
-
-const API_BASE_URL = resolverApiBaseUrl().replace(/\/$/, '');
-
-function apiUrl(path) {
-    return `${API_BASE_URL}${path.startsWith('/') ? path : `/${path}`}`;
-}
-
-async function lerResposta(response) {
-    const texto = await response.text();
-
-    if (!texto) {
-        return {};
-    }
-
-    try {
-        return JSON.parse(texto);
-    } catch (error) {
-        return { mensagem: texto };
-    }
-}
-
-function getLoggedUser() {
-    try {
-        return JSON.parse(localStorage.getItem(AUTH_KEY) || 'null');
-    } catch (error) {
-        console.error('Erro ao ler usuário:', error);
-        localStorage.removeItem(AUTH_KEY);
-        return null;
-    }
-}
-
-function hasValidSession() {
-    return Boolean(localStorage.getItem('petabyte-token')) && Boolean(getLoggedUser());
-}
 
 function requireAuthenticatedCheckout() {
     if (hasValidSession()) {
@@ -57,12 +12,6 @@ function requireAuthenticatedCheckout() {
     alert('Faça login para finalizar a compra.');
     window.location.href = 'auth.html';
     return false;
-}
-
-function logoutUser() {
-    localStorage.removeItem(AUTH_KEY);
-    localStorage.removeItem('petabyte-token');
-    window.location.href = 'auth.html';
 }
 
 function formatCurrency(value) {
@@ -262,23 +211,14 @@ async function iniciarPagamento() {
         return;
     }
 
-    const token = localStorage.getItem('petabyte-token');
-
     try {
-        const response = await fetch(apiUrl('/pagamentos/criar'), {
+        const data = await chamarApi('/pagamentos/criar', {
             method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-                Authorization: `Bearer ${token}`
-            },
             // Só id e quantidade. O servidor resolve nome e preço no banco.
             body: JSON.stringify({
                 itens: cart.map((item) => ({ id: item.id, quantidade: item.quantidade }))
             })
         });
-
-        const data = await lerResposta(response);
-        if (!response.ok) throw new Error(data.mensagem || 'Falha ao iniciar pagamento.');
 
         const urlCheckout = data.checkoutUrl || data.checkoutSandboxUrl;
         if (!urlCheckout) {
@@ -302,24 +242,18 @@ async function tratarRetornoPagamento() {
         return;
     }
 
-    const token = localStorage.getItem('petabyte-token');
-    if (!token) {
+    if (!hasValidSession()) {
         return;
     }
 
     if (paymentId) {
         try {
-            const response = await fetch(apiUrl('/pagamentos/confirmar'), {
+            // Na volta do Mercado Pago o access token pode ter vencido durante o
+            // pagamento; chamarApi renova a sessão sozinha antes de confirmar.
+            const data = await chamarApi('/pagamentos/confirmar', {
                 method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                    Authorization: `Bearer ${token}`
-                },
                 body: JSON.stringify({ paymentId })
             });
-
-            const data = await lerResposta(response);
-            if (!response.ok) throw new Error(data.mensagem || 'Não foi possível confirmar o pagamento.');
 
             if (data.status === 'approved') {
                 localStorage.removeItem(STORAGE_KEY);
@@ -841,17 +775,17 @@ document.addEventListener('DOMContentLoaded', () => {
             const senha = document.getElementById('loginSenha').value;
 
             try {
-                const response = await fetch(apiUrl('/auth/login'), {
+                // requisitar, não chamarApi: aqui 401 é senha errada, não
+                // sessão vencida. A sessão chega em cookies httpOnly.
+                const response = await requisitar('/auth/login', {
                     method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ email, senha })
                 });
 
                 const data = await lerResposta(response);
                 if (!response.ok) throw new Error(data.mensagem || 'Erro ao entrar.');
 
-                localStorage.setItem(AUTH_KEY, JSON.stringify(data.usuario));
-                localStorage.setItem('petabyte-token', data.token);
+                salvarUsuarioLocal(data.usuario);
                 alert(data.mensagem || 'Login realizado com sucesso!');
                 window.location.href = 'E-Commerce.html';
             } catch (error) {
@@ -876,17 +810,18 @@ document.addEventListener('DOMContentLoaded', () => {
             }
 
             try {
-                const response = await fetch(apiUrl('/auth/cadastro'), {
+                const response = await requisitar('/auth/cadastro', {
                     method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ nome, email, senha })
                 });
 
                 const data = await lerResposta(response);
                 if (!response.ok) throw new Error(data.mensagem || 'Erro ao criar conta.');
 
+                // O cadastro já abre a sessão: segue para a loja como no login.
+                salvarUsuarioLocal(data.usuario);
                 alert(data.mensagem || 'Conta criada com sucesso!');
-                registerForm.reset();
+                window.location.href = 'E-Commerce.html';
             } catch (error) {
                 console.error(error);
                 alert(error.message || 'Não foi possível criar a conta.');

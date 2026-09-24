@@ -37,12 +37,24 @@ async function criarUsuario({ admin = false } = {}) {
     return resultado.rows[0];
 }
 
-// Emite um token igual ao do login, sem passar por bcrypt: os testes de
+// Emite um access token igual ao do login, sem passar por bcrypt: os testes de
 // autorização se importam com o que o middleware faz com o token, não com a
 // verificação de senha, que já é coberta em outro lugar.
 function emitirToken(usuario) {
     const jwt = require('jsonwebtoken');
-    return jwt.sign({ id: usuario.id, email: usuario.email }, process.env.JWT_SECRET, { expiresIn: '2h' });
+    return jwt.sign({ id: usuario.id, email: usuario.email }, process.env.JWT_SECRET, { expiresIn: '15m' });
+}
+
+// Cabeçalhos de uma requisição autenticada do jeito que o navegador manda: o
+// access token em cookie e o CSRF em dobro, cookie e header. O middleware de
+// CSRF exige os dois em toda escrita que carregue cookie de sessão.
+const CSRF_DE_TESTE = 'csrf-de-teste';
+
+function cabecalhosDeSessao(token) {
+    return {
+        Cookie: `access_token=${token}; csrf_token=${CSRF_DE_TESTE}`,
+        'X-CSRF-Token': CSRF_DE_TESTE
+    };
 }
 
 async function definirAdmin(usuarioId, admin) {
@@ -61,4 +73,14 @@ async function limpar() {
     await pool.query('DELETE FROM produtos WHERE nome LIKE $1', [`${PREFIXO}%`]);
 }
 
-module.exports = { criarProduto, criarUsuario, emitirToken, definirAdmin, lerEstoque, limpar, pool, PREFIXO };
+module.exports = {
+    criarProduto,
+    criarUsuario,
+    emitirToken,
+    cabecalhosDeSessao,
+    definirAdmin,
+    lerEstoque,
+    limpar,
+    pool,
+    PREFIXO
+};
