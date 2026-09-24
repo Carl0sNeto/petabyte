@@ -982,6 +982,29 @@ function criarTransportadoresFallbackEmail() {
     return configuracoes.map((configuracao) => nodemailer.createTransport(configuracao));
 }
 
+// O token de recuperação vai em claro no e-mail, mas só o hash dele é gravado.
+// Enquanto vale, ele troca a senha de qualquer conta, então merece o mesmo
+// cuidado da senha: um dump de password_resets com valores brutos daria acesso
+// a toda conta com pedido pendente. SHA-256 sem sal basta — o token tem 256
+// bits aleatórios, não há dicionário a atacar como numa senha escolhida por
+// gente. E bcrypt não serviria: com sal, não dá para buscar por WHERE token.
+function hashTokenRecuperacao(token) {
+    return crypto.createHash('sha256').update(String(token)).digest('hex');
+}
+
+// Devolve o token bruto, que só deve seguir para o e-mail.
+async function criarTokenRecuperacao(usuarioId) {
+    const token = crypto.randomBytes(32).toString('hex');
+    const expiraEm = new Date(Date.now() + 30 * 60 * 1000);
+
+    await pool.query(
+        'INSERT INTO password_resets (usuario_id, token, expira_em) VALUES ($1, $2, $3)',
+        [usuarioId, hashTokenRecuperacao(token), expiraEm]
+    );
+
+    return token;
+}
+
 async function enviarEmailRecuperacao(email, token) {
     const baseUrl = process.env.APP_BASE_URL || `http://localhost:${PORT}`;
     const resetUrl = `${baseUrl}/redefinir-senha.html?token=${token}`;
@@ -989,8 +1012,10 @@ async function enviarEmailRecuperacao(email, token) {
     try {
         const transportadores = criarTransportadoresFallbackEmail();
 
+        // Sem o e-mail no log: ele só chega aqui quando a conta existe, então
+        // registrá-lo revelaria quais e-mails têm cadastro.
         if (transportadores.length === 0) {
-            console.log(`[RESET] E-mail para ${email}: ${resetUrl}`);
+            console.log('[RESET] SMTP não configurado; e-mail de recuperação não enviado.');
             return { ok: false, motivo: 'SMTP não configurado', resetUrl };
         }
 
@@ -1007,7 +1032,7 @@ async function enviarEmailRecuperacao(email, token) {
             try {
                 await transportador.verify();
                 await transportador.sendMail(mensagem);
-                console.log(`[RESET] E-mail enviado para ${email} usando a configuração SMTP #${indice + 1}`);
+                console.log(`[RESET] E-mail enviado usando a configuração SMTP #${indice + 1}`);
                 return { ok: true };
             } catch (erro) {
                 ultimoErro = erro;
@@ -1026,7 +1051,6 @@ async function enviarEmailRecuperacao(email, token) {
     } catch (erro) {
         const mensagemErro = erro && erro.message ? erro.message : String(erro);
         console.error('[RESET] Falha ao enviar e-mail:', mensagemErro);
-        console.log(`[RESET] Link de recuperação: ${resetUrl}`);
         return { ok: false, motivo: mensagemErro, resetUrl };
     }
 }
@@ -1137,6 +1161,16 @@ async function iniciarServidor() {
         });
         listener.on('error', reject);
     });
+
+    // resolverCorsOrigin aceita qualquer origem quando a lista está vazia. Não
+    // trava a subida por uma variável opcional, mas também não falha aberto em
+    // silêncio: no Render ela é preenchida à mão e é fácil esquecer.
+    if (corsOrigins.length === 0) {
+        console.warn(
+            '[CORS] CORS_ORIGINS não configurado: aceitando requisições de qualquer origem. ' +
+            'Defina a variável para restringir em produção.'
+        );
+    }
 }
 
 // Só sobe o servidor quando executado direto (npm start). Ao ser importado
@@ -1156,7 +1190,8 @@ module.exports = {
     resolverItensCarrinho,
     mapearStatusPagamento,
     registrarPedidoPendente,
-    sincronizarPagamentoNoBanco
+    sincronizarPagamentoNoBanco,
+    criarTokenRecuperacao
 };
 
 app.get('/health', (req, res) => {
@@ -1188,6 +1223,17 @@ app.post('/usuarios', limitadorCadastro, async (req, res) => {
     }
 
     try {
+        // E-mail já cadastrado responde sucesso sem tocar na conta. Para quem
+        // assina a newsletter, o que importa (estar na lista) já é verdade —
+        // diferente de /auth/cadastro, que devolve 409 porque ali a pessoa
+        // precisa saber que deve entrar em vez de cadastrar. Sem esta checagem
+        // o INSERT batia na UNIQUE e caía no 500 genérico abaixo.
+        const existente = await pool.query('SELECT id FROM usuarios WHERE email = $1', [email]);
+
+        if (existente.rowCount > 0) {
+            return res.status(200).json({ mensagem: 'Usuário salvo com sucesso!' });
+        }
+
         // Cadastro de newsletter não define senha. Usamos um valor aleatório
         // descartado em seguida para que a conta não seja acessível por login
         // até que o usuário use o fluxo de recuperação de senha.
@@ -1396,36 +1442,33 @@ app.get('/auth/me/avaliacoes', autenticarToken, async (req, res) => {
 app.post('/auth/recuperar-senha', limitadorSenha, async (req, res) => {
     const { email } = req.body;
 
-    console.log(`[RESET] solicitação recebida para: ${email || '(sem e-mail)'}`);
-
     if (!email) {
-        console.log('[RESET] e-mail ausente na requisição');
         return res.status(400).json({ mensagem: 'Informe um e-mail para continuar.' });
     }
 
     try {
         const resultado = await pool.query('SELECT id FROM usuarios WHERE email = $1', [email]);
-        console.log(`[RESET] consulta de usuário retornou ${resultado.rowCount} linha(s)`);
 
+        // O mesmo log, idêntico, nos dois caminhos. Se ele saísse só quando a
+        // conta existe, a presença da linha no log revelaria o cadastro — o
+        // que a resposta genérica abaixo existe justamente para esconder.
         if (resultado.rowCount === 0) {
-            console.log('[RESET] e-mail não encontrado; retornando resposta genérica');
+            console.log('[RESET] solicitação de recuperação processada');
             return res.json({ mensagem: 'Se o e-mail estiver cadastrado, você receberá um link para redefinir a senha.' });
         }
 
-        const token = crypto.randomBytes(32).toString('hex');
-        const expiraEm = new Date(Date.now() + 30 * 60 * 1000);
-        console.log(`[RESET] criando token para usuário ${resultado.rows[0].id}`);
-        await pool.query('INSERT INTO password_resets (usuario_id, token, expira_em) VALUES ($1, $2, $3)', [resultado.rows[0].id, token, expiraEm]);
-        console.log('[RESET] token salvo no banco');
+        const token = await criarTokenRecuperacao(resultado.rows[0].id);
         const resultadoEnvio = await enviarEmailRecuperacao(email, token);
 
         if (!resultadoEnvio || !resultadoEnvio.ok) {
             console.error('[RESET] envio SMTP falhou:', resultadoEnvio && resultadoEnvio.motivo ? resultadoEnvio.motivo : 'motivo não informado');
-            await pool.query('DELETE FROM password_resets WHERE token = $1', [token]);
+            // O banco guarda o hash, não o token: apagar pelo valor bruto não
+            // acharia a linha e deixaria um link válido que ninguém recebeu.
+            await pool.query('DELETE FROM password_resets WHERE token = $1', [hashTokenRecuperacao(token)]);
             return res.status(502).json({ mensagem: 'Não foi possível enviar o e-mail de recuperação no momento. Tente novamente mais tarde.' });
         }
 
-        console.log('[RESET] fluxo concluído com sucesso');
+        console.log('[RESET] solicitação de recuperação processada');
 
         return res.json({ mensagem: 'Se o e-mail estiver cadastrado, você receberá um link para redefinir a senha.' });
     } catch (erro) {
@@ -1445,7 +1488,11 @@ app.post('/auth/redefinir-senha', limitadorSenha, async (req, res) => {
     }
 
     try {
-        const resultado = await pool.query('SELECT id, usuario_id, expira_em, usado FROM password_resets WHERE token = $1', [token]);
+        // Compara hash com hash: o banco nunca viu o token bruto.
+        const resultado = await pool.query(
+            'SELECT id, usuario_id, expira_em, usado FROM password_resets WHERE token = $1',
+            [hashTokenRecuperacao(token)]
+        );
 
         if (resultado.rowCount === 0) {
             return res.status(404).json({ mensagem: 'Token inválido ou expirado.' });
@@ -1462,7 +1509,13 @@ app.post('/auth/redefinir-senha', limitadorSenha, async (req, res) => {
 
         const senhaHash = await bcrypt.hash(senha, 10);
         await pool.query('UPDATE usuarios SET senha = $1 WHERE id = $2', [senhaHash, reset.usuario_id]);
-        await pool.query('UPDATE password_resets SET usado = TRUE WHERE id = $1', [reset.id]);
+        // Invalida todos os pedidos pendentes da pessoa, não só o do link
+        // clicado. Quem pediu recuperação duas vezes ficaria com o outro link
+        // valendo por até 30 minutos depois de a senha já ter sido trocada.
+        await pool.query(
+            'UPDATE password_resets SET usado = TRUE WHERE usuario_id = $1 AND usado = FALSE',
+            [reset.usuario_id]
+        );
 
         res.json({ mensagem: 'Senha redefinida com sucesso!' });
     } catch (erro) {
@@ -1658,11 +1711,10 @@ app.get('/produtos/:id', async (req, res) => {
                 nome: p.nome,
                 descricao: p.descricao,
                 preco,
+                // O percentual de desconto não sai daqui: a vitrine e esta
+                // página calculam pela mesma função em public/script.js
+                // (calcularDescontoPercentual), para a regra morar num lugar só.
                 precoOriginal,
-                // Só faz sentido anunciar desconto se o original for maior.
-                descontoPercentual: precoOriginal && precoOriginal > preco
-                    ? Math.round((1 - preco / precoOriginal) * 100)
-                    : null,
                 categoria: p.categoria,
                 categoriaRotulo: (CATEGORIAS.find((c) => c.slug === p.categoria) || {}).rotulo || p.categoria,
                 imagemUrl: p.imagem_url,

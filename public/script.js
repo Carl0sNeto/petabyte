@@ -463,6 +463,50 @@ function estrelasSimples(nota) {
     return `${saida}</span>`;
 }
 
+// Percentual anunciado no selo. Arredonda para BAIXO: um desconto real de
+// 14,6% vira "-14%", nunca "-15%" — anunciar mais do que o real é propaganda
+// enganosa, então a conta erra sempre a favor de subestimar.
+//
+// Em centavos inteiros de propósito: em ponto flutuante, (1 - 80 / 100) * 100
+// dá 19.999999999999996, e o floor transformaria 20% reais em "-19%".
+function calcularDescontoPercentual(preco, precoOriginal) {
+    const atual = Math.round(Number(preco) * 100);
+    const original = Math.round(Number(precoOriginal) * 100);
+
+    if (!(original > atual) || atual <= 0) return null;
+
+    return Math.floor(((original - atual) * 100) / original);
+}
+
+// Preço riscado e selo de desconto, compartilhados pelo card da vitrine e pela
+// página de produto. A regra mora só aqui para os lugares não divergirem.
+// Devolve os dois pedaços separados porque cada layout os posiciona de um jeito.
+//
+// O rótulo para leitor de tela vai como texto oculto, não como aria-label: a
+// especificação ARIA proíbe nome acessível em <del> e em <span>, e os leitores
+// de tela ignoram o atributo nesses elementos.
+function renderDesconto(produto) {
+    const original = Number(produto.precoOriginal);
+
+    // Sem original, ou com original que não supera o preço (inclusive o campo
+    // zerado quando a promoção acaba), mostra só o preço normal.
+    if (!produto.precoOriginal || !(original > Number(produto.preco))) {
+        return { precoAntigo: '', selo: '' };
+    }
+
+    const percentual = calcularDescontoPercentual(produto.preco, original);
+
+    return {
+        precoAntigo: `<del class="preco-antigo"><span class="so-leitor">Preço original: </span>${formatCurrency(original)}</del>`,
+        // Abaixo de 1% o floor dá zero, e "-0%" não é selo que se mostre.
+        // O "-21%" visual fica escondido do leitor de tela: colado no preço,
+        // seria lido como subtração ("1.499,00 menos 21 por cento").
+        selo: percentual >= 1
+            ? `<span class="selo-desconto"><span aria-hidden="true">-${percentual}%</span><span class="so-leitor"> ${percentual}% de desconto</span></span>`
+            : ''
+    };
+}
+
 // O banco guarda o slug ("perifericos"); quem aparece na tela é o rótulo
 // ("Periféricos"), que vem junto da API.
 function rotuloCategoria(slug) {
@@ -536,9 +580,7 @@ async function renderProductGrid() {
                      <span>(${produto.totalAvaliacoes})</span></div>`
                 : '<div class="nota-linha vazia">Sem avaliações</div>';
 
-            const precoAntigo = produto.precoOriginal && produto.precoOriginal > produto.preco
-                ? `<span class="preco-antigo">${formatCurrency(produto.precoOriginal)}</span>`
-                : '';
+            const desconto = renderDesconto(produto);
 
             const enderecoProduto = `produto.html?id=${produto.id}`;
 
@@ -556,8 +598,8 @@ async function renderProductGrid() {
                         ${nota}
                         ${estoque}
                         <div class="produto-preco">
-                            ${precoAntigo}
-                            <span class="valor">${formatCurrency(produto.preco)}</span>
+                            ${desconto.precoAntigo}
+                            <span class="valor">${formatCurrency(produto.preco)}${desconto.selo}</span>
                             <span class="parcelas">ou 12x de ${formatCurrency(produto.preco / 12)} sem juros</span>
                         </div>
                         <button class="btn btn-comprar add-to-cart" type="button" data-id="${produto.id}"${produto.disponivel ? '' : ' disabled'}>

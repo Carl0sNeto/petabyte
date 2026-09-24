@@ -93,6 +93,20 @@ p { margin: 0 0 1rem; }
 .container { width: min(var(--largura), calc(100% - 2.5rem)); margin: 0 auto; }
 .muted { color: var(--texto-2); }
 .hidden { display: none !important; }
+
+/* Texto que só o leitor de tela lê. Substitui aria-label onde ele não vale:
+   a especificação ARIA proíbe nome acessível em <del> e em <span> genérico. */
+.so-leitor {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    margin: -1px;
+    padding: 0;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+    border: 0;
+}
 .num { font-variant-numeric: tabular-nums; }
 
 /* ==========================================================================
@@ -559,9 +573,16 @@ main { padding: 2.5rem 0 3.5rem; }
     color: var(--preco);
     letter-spacing: -.025em;
     font-variant-numeric: tabular-nums;
-    display: block;
     line-height: 1.15;
+    /* Flex com gap, e não margem no selo: no celular o card é estreito e o selo
+       desce para a linha de baixo. A margem iria junto e o deixaria recuado em
+       relação ao preço; o gap só existe entre itens da mesma linha. */
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: .2rem .45rem;
 }
+.produto-preco .selo-desconto { margin-left: 0; }
 .produto-preco .parcelas {
     font-size: .78rem;
     color: var(--texto-2);
@@ -726,6 +747,8 @@ main { padding: 2.5rem 0 3.5rem; }
     font-size: .92rem;
     font-variant-numeric: tabular-nums;
 }
+/* Só o valor é riscado; o "De" que o antecede, não. */
+.preco-de { color: var(--texto-3); font-size: .92rem; }
 .preco-atual {
     font-size: 2.1rem;
     font-weight: 800;
