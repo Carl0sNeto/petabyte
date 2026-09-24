@@ -138,10 +138,25 @@ Armazena tokens para recuperação de senha.
 |-------|------|-----------|
 | id | SERIAL PRIMARY KEY | Identificador único |
 | usuario_id | INTEGER NOT NULL | FK para usuarios.id |
-| token | TEXT NOT NULL UNIQUE | Token de recuperação |
+| token | TEXT NOT NULL UNIQUE | SHA-256 do token de recuperação. O valor bruto só vai no e-mail |
 | expira_em | TIMESTAMP NOT NULL | Data/hora de expiração (30 minutos) |
 | usado | BOOLEAN DEFAULT FALSE | Indica se o token foi utilizado |
 | criado_em | TIMESTAMP | Data/hora da criação do token |
+
+### 7. **refresh_tokens**
+Sessões de login. O access token (JWT de 15 minutos) não passa pelo banco; o
+refresh token, que renova a sessão por até 30 dias, fica aqui para poder ser
+revogado.
+
+| Campo | Tipo | Descrição |
+|-------|------|-----------|
+| id | SERIAL PRIMARY KEY | Identificador único |
+| usuario_id | INTEGER NOT NULL | FK para usuarios.id (ON DELETE CASCADE) |
+| token_hash | TEXT NOT NULL UNIQUE | SHA-256 do refresh token. O valor bruto só existe no cookie do navegador |
+| criado_em | TIMESTAMP NOT NULL | Data/hora de emissão |
+| expira_em | TIMESTAMP NOT NULL | 30 dias depois da emissão, calculado no banco |
+| revogado_em | TIMESTAMP | Preenchido na rotação, no logout, na troca de senha ou quando se detecta reuso |
+| substituido_por | INTEGER | FK para o token que o substituiu na rotação. Distingue "trocado por outro" (reapresentar é reuso) de "sessão encerrada" |
 
 ## Como Executar o Script
 
@@ -199,6 +214,7 @@ No deploy isso já acontece sozinho: o `startCommand` do `render.yaml` roda
 | `migrations/005_catalogo_gamer.sql` | Cadastra os 10 produtos gamer iniciais |
 | `migrations/006_reconcilia_placas_duplicadas.sql` | Reconcilia duas placas de vídeo que já existiam cadastradas à mão |
 | `migrations/007_pagina_de_produto.sql` | Adiciona `preco_original` e `especificacoes` em produtos, e cria `produto_imagens` e `avaliacoes` |
+| `migrations/011_refresh_tokens.sql` | Cria `refresh_tokens`, que guarda as sessões de login. A numeração pula 008 a 010, reservados para specs que ainda não entraram |
 
 A migration 001 aborta com erro se houver e-mails duplicados em `usuarios`.
 Nesse caso, consolide os registros antes de aplicá-la.
@@ -245,7 +261,7 @@ acontece pelo webhook e por `/pagamentos/confirmar`.
 Toda rota `/admin/*` passa por `autenticarToken` e depois por `exigirAdmin`, que
 **consulta a flag no banco a cada requisição** em vez de ler do JWT. Por isso
 revogar o acesso tem efeito imediato: um token emitido antes da revogação para
-de funcionar na hora, sem esperar as 2h de expiração.
+de funcionar na hora, sem esperar os 15 minutos de expiração do access token.
 
 Esconder a interface no navegador é conveniência de usabilidade, não segurança.
 A proteção real está no servidor.

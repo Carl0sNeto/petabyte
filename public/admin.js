@@ -1,30 +1,12 @@
 // Painel administrativo.
 //
-// Reaproveita o token do login normal (chave petabyte-token). A interface só
-// aparece se GET /auth/me devolver admin true — mas isso é conveniência de UX,
-// não segurança: quem protege são os middlewares autenticarToken + exigirAdmin
-// no servidor, que conferem a flag no banco a cada requisição.
-
-const AUTH_KEY = 'petabyte-user';
-const TOKEN_KEY = 'petabyte-token';
-
-function resolverApiBaseUrl() {
-    if (window.__PETABYTE_API_BASE_URL) {
-        return window.__PETABYTE_API_BASE_URL;
-    }
-
-    if (window.location.protocol === 'file:') {
-        return 'http://localhost:3000';
-    }
-
-    return window.location.origin || 'http://localhost:3000';
-}
-
-const API_BASE_URL = resolverApiBaseUrl().replace(/\/$/, '');
-
-function apiUrl(caminho) {
-    return `${API_BASE_URL}${caminho.startsWith('/') ? caminho : `/${caminho}`}`;
-}
+// Reaproveita a sessão do login normal, em cookies. A interface só aparece se
+// GET /auth/me devolver admin true — mas isso é conveniência de UX, não
+// segurança: quem protege são os middlewares autenticarToken + exigirAdmin no
+// servidor, que conferem a flag no banco a cada requisição.
+//
+// Carrega depois de sessao.js, de quem usa chamarApi, hasValidSession,
+// encerrarSessaoLocal e logoutUser — a mesma chamada autenticada da loja.
 
 function escapeHtml(valor) {
     return String(valor === null || valor === undefined ? '' : valor)
@@ -42,38 +24,6 @@ function formatarMoeda(valor) {
 function formatarData(iso) {
     if (!iso) return '—';
     return new Date(iso).toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'short' });
-}
-
-async function chamarApi(caminho, opcoes = {}) {
-    const token = localStorage.getItem(TOKEN_KEY);
-
-    const resposta = await fetch(apiUrl(caminho), {
-        ...opcoes,
-        headers: {
-            'Content-Type': 'application/json',
-            Authorization: `Bearer ${token}`,
-            ...(opcoes.headers || {})
-        }
-    });
-
-    const texto = await resposta.text();
-    let dados = {};
-
-    if (texto) {
-        try {
-            dados = JSON.parse(texto);
-        } catch (erro) {
-            dados = { mensagem: texto };
-        }
-    }
-
-    if (!resposta.ok) {
-        const falha = new Error(dados.mensagem || `Falha na requisição (${resposta.status}).`);
-        falha.status = resposta.status;
-        throw falha;
-    }
-
-    return dados;
 }
 
 // --------------------------------------------------------------------------
@@ -509,7 +459,7 @@ async function abrirPedido(id) {
 // --------------------------------------------------------------------------
 
 async function iniciar() {
-    if (!localStorage.getItem(TOKEN_KEY)) {
+    if (!hasValidSession()) {
         bloquear('Você não está autenticado', 'Entre com uma conta de administrador para acessar o painel.', true);
         return;
     }
@@ -517,10 +467,10 @@ async function iniciar() {
     let dados;
 
     try {
-        dados = await chamarApi('/auth/me');
+        // Sem redirecionar: o painel tem a própria tela de bloqueio.
+        dados = await chamarApi('/auth/me', { redirecionarSeDeslogado: false });
     } catch (erro) {
-        localStorage.removeItem(TOKEN_KEY);
-        localStorage.removeItem(AUTH_KEY);
+        encerrarSessaoLocal();
         bloquear('Sessão expirada', 'Entre novamente para continuar.', true);
         return;
     }
@@ -560,11 +510,7 @@ document.addEventListener('DOMContentLoaded', () => {
     document.getElementById('formProduto').addEventListener('submit', salvarProduto);
     configurarPrevia();
 
-    document.getElementById('sairBtn').addEventListener('click', () => {
-        localStorage.removeItem(TOKEN_KEY);
-        localStorage.removeItem(AUTH_KEY);
-        window.location.href = 'auth.html';
-    });
+    document.getElementById('sairBtn').addEventListener('click', logoutUser);
 
     document.getElementById('filtroStatus').addEventListener('change', (evento) => {
         estadoPedidos.status = evento.target.value;

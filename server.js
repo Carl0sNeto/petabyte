@@ -9,6 +9,7 @@ const nodemailer = require('nodemailer');
 const { MercadoPagoConfig, Preference, Payment } = require('mercadopago');
 const { Pool } = require('pg');
 const cors = require('cors');
+const cookieParser = require('cookie-parser');
 const helmet = require('helmet');
 const rateLimit = require('express-rate-limit');
 
@@ -89,9 +90,16 @@ app.use(helmet({
 app.use(cors({
     origin: resolverCorsOrigin,
     methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
-    allowedHeaders: ['Content-Type', 'Authorization']
+    // A sessão vive em cookies. Sem credentials, o navegador descarta os
+    // cookies de respostas cross-origin (o front numa porta, a API em outra).
+    credentials: true,
+    // X-CSRF-Token precisa constar aqui, ou o preflight cross-origin barra
+    // toda escrita. Authorization saiu: nenhuma rota lê mais esse header.
+    allowedHeaders: ['Content-Type', 'X-CSRF-Token']
 }));
 app.use(express.json());
+app.use(cookieParser());
+app.use(exigirCsrf);
 app.use((req, res, next) => {
     const inicio = Date.now();
     console.log(`[REQ] ${req.method} ${req.path}`);
@@ -622,27 +630,179 @@ async function sincronizarPagamentoNoBanco(pagamento) {
     return resultado;
 }
 
-function autenticarToken(req, res, next) {
-    const cabecalho = req.headers.authorization;
+// ---------------------------------------------------------------------------
+// Sessão: access token + refresh token em cookies httpOnly
+// ---------------------------------------------------------------------------
+//
+// O access token é um JWT curto que autentica cada requisição sem ir ao banco
+// e, por isso, não se revoga — o que limita o estrago de um vazado é durar só
+// 15 minutos. O refresh token é aleatório, dura 30 dias, fica com hash no banco
+// e é o que se revoga de verdade (logout, troca de senha, reuso).
+//
+// Os dois ficam em cookies httpOnly: o JavaScript da página não os lê, então
+// um script injetado (XSS) não consegue levá-los embora.
 
-    if (!cabecalho || !cabecalho.startsWith('Bearer ')) {
-        return res.status(401).json({ mensagem: 'Token ausente ou inválido.' });
+const PRODUCAO = process.env.NODE_ENV === 'production';
+
+const COOKIE_ACCESS = 'access_token';
+const COOKIE_REFRESH = 'refresh_token';
+const COOKIE_CSRF = 'csrf_token';
+
+const DURACAO_ACCESS_SEGUNDOS = 15 * 60;
+const DURACAO_REFRESH_SEGUNDOS = 30 * 24 * 60 * 60;
+
+// /auth, e não /auth/refresh: o logout também precisa ler este cookie para
+// revogar a sessão, e com Path=/auth/refresh o navegador nunca o mandaria para
+// /auth/logout. Continua fora de todo o resto da API.
+const CAMINHO_COOKIE_REFRESH = '/auth';
+
+// Duas abas com o access token vencido podem mandar o MESMO refresh token no
+// mesmo instante. A primeira rotaciona; a segunda chega com um token recém-
+// revogado. Dentro desta janela isso é corrida, não ataque: responde 401 sem
+// derrubar todas as sessões, e a segunda aba usa os cookies que a primeira já
+// renovou. Nenhum token novo sai daqui, então um atacante não ganha nada.
+const JANELA_CORRIDA_SEGUNDOS = 60;
+
+// SameSite=Lax, e não Strict: a volta do checkout do Mercado Pago é navegação
+// vinda de outro domínio, e com Strict a pessoa chegaria deslogada justamente
+// ao voltar de pagar. A defesa contra CSRF vem do token dedicado, não daqui.
+// Secure só em produção: localmente não há HTTPS, e ele travaria todo login.
+function opcoesDeCookie(extras) {
+    return { httpOnly: true, secure: PRODUCAO, sameSite: 'lax', ...extras };
+}
+
+function definirCookiesDeSessao(res, accessToken, refreshToken, csrfToken) {
+    res.cookie(COOKIE_ACCESS, accessToken, opcoesDeCookie({
+        path: '/',
+        maxAge: DURACAO_ACCESS_SEGUNDOS * 1000
+    }));
+    res.cookie(COOKIE_REFRESH, refreshToken, opcoesDeCookie({
+        path: CAMINHO_COOKIE_REFRESH,
+        maxAge: DURACAO_REFRESH_SEGUNDOS * 1000
+    }));
+    // O único que NÃO é httpOnly: o front precisa lê-lo para devolvê-lo no
+    // header X-CSRF-Token. Não é segredo — a proteção vem de um site de outra
+    // origem não conseguir ler o cookie para montar o header que bate.
+    res.cookie(COOKIE_CSRF, csrfToken, {
+        ...opcoesDeCookie({ path: '/', maxAge: DURACAO_REFRESH_SEGUNDOS * 1000 }),
+        httpOnly: false
+    });
+}
+
+function limparCookiesDeSessao(res) {
+    res.clearCookie(COOKIE_ACCESS, opcoesDeCookie({ path: '/' }));
+    res.clearCookie(COOKIE_REFRESH, opcoesDeCookie({ path: CAMINHO_COOKIE_REFRESH }));
+    res.clearCookie(COOKIE_CSRF, { ...opcoesDeCookie({ path: '/' }), httpOnly: false });
+}
+
+function emitirAccessToken(usuario) {
+    return jwt.sign({ id: usuario.id, email: usuario.email }, JWT_SECRET, { expiresIn: DURACAO_ACCESS_SEGUNDOS });
+}
+
+// Grava o refresh token e devolve o valor bruto, que só segue para o cookie.
+// Os prazos são calculados no banco (NOW()), nunca em JS: revogado_em também
+// vem de NOW(), e misturar relógios com TIMESTAMP sem fuso daria horas de
+// diferença quando o processo e o banco estão em fusos distintos.
+async function gravarRefreshToken(cliente, usuarioId) {
+    const token = crypto.randomBytes(32).toString('hex');
+
+    const resultado = await cliente.query(
+        `INSERT INTO refresh_tokens (usuario_id, token_hash, expira_em)
+         VALUES ($1, $2, NOW() + make_interval(secs => $3))
+         RETURNING id`,
+        [usuarioId, hashToken(token), DURACAO_REFRESH_SEGUNDOS]
+    );
+
+    return { token, id: resultado.rows[0].id };
+}
+
+// Abre uma sessão nova: access + refresh + CSRF. Login, cadastro e troca de
+// senha passam por aqui. O CSRF é sempre novo, para uma sessão nova não
+// herdar o token de outra.
+async function iniciarSessao(res, usuario) {
+    const { token: refreshToken } = await gravarRefreshToken(pool, usuario.id);
+    const csrfToken = crypto.randomBytes(32).toString('hex');
+
+    definirCookiesDeSessao(res, emitirAccessToken(usuario), refreshToken, csrfToken);
+}
+
+async function revogarSessoesDoUsuario(cliente, usuarioId) {
+    await cliente.query(
+        'UPDATE refresh_tokens SET revogado_em = NOW() WHERE usuario_id = $1 AND revogado_em IS NULL',
+        [usuarioId]
+    );
+}
+
+// ---------------------------------------------------------------------------
+// CSRF — double-submit cookie
+// ---------------------------------------------------------------------------
+
+const METODOS_SEGUROS = new Set(['GET', 'HEAD', 'OPTIONS']);
+
+// Rotas de entrada, que não agem em nome de sessão nenhuma. Além disso, o
+// cookie csrf_token nasce no login: exigi-lo no próprio login impediria o
+// primeiro acesso de qualquer pessoa. O webhook é chamado pelo Mercado Pago,
+// que nunca teve cookie.
+const ROTAS_SEM_CSRF = new Set([
+    '/auth/login',
+    '/auth/cadastro',
+    '/usuarios',
+    '/auth/recuperar-senha',
+    '/auth/redefinir-senha',
+    '/pagamentos/webhook'
+]);
+
+function tokensIguais(a, b) {
+    const bufferA = Buffer.from(String(a));
+    const bufferB = Buffer.from(String(b));
+    return bufferA.length === bufferB.length && crypto.timingSafeEqual(bufferA, bufferB);
+}
+
+// Só exige o token quando a requisição carrega cookie de sessão. CSRF é o
+// abuso de credencial que o navegador anexa sozinho; sem cookie de sessão não
+// há credencial a abusar, e a rota protegida responde 401 por conta própria —
+// o que deixa o front renovar a sessão em vez de mostrar um 403 sem sentido.
+function exigirCsrf(req, res, next) {
+    if (METODOS_SEGUROS.has(req.method) || ROTAS_SEM_CSRF.has(req.path)) {
+        return next();
     }
 
-    const token = cabecalho.split(' ')[1];
+    const cookies = req.cookies || {};
+    if (!cookies[COOKIE_ACCESS] && !cookies[COOKIE_REFRESH]) {
+        return next();
+    }
+
+    const doCookie = cookies[COOKIE_CSRF];
+    const doCabecalho = req.get('X-CSRF-Token');
+
+    if (!doCookie || !doCabecalho || !tokensIguais(doCookie, doCabecalho)) {
+        return res.status(403).json({ mensagem: 'Requisição recusada: token de segurança ausente ou inválido.' });
+    }
+
+    return next();
+}
+
+// A fonte do token mudou (cookie, não header); a lógica, não. Toda rota que
+// usa req.usuario continua igual.
+function autenticarToken(req, res, next) {
+    const token = req.cookies && req.cookies[COOKIE_ACCESS];
+
+    if (!token) {
+        return res.status(401).json({ mensagem: 'Sessão ausente ou expirada.' });
+    }
 
     try {
-        const decoded = jwt.verify(token, JWT_SECRET);
-        req.usuario = decoded;
-        next();
+        req.usuario = jwt.verify(token, JWT_SECRET);
+        return next();
     } catch (erro) {
-        return res.status(401).json({ mensagem: 'Token inválido ou expirado.' });
+        // 401, e não 403: é o status que faz o front tentar renovar a sessão.
+        return res.status(401).json({ mensagem: 'Sessão ausente ou expirada.' });
     }
 }
 
 // Confere a flag no banco a cada requisição, em vez de ler do JWT. Assim,
 // revogar o acesso tem efeito imediato: um token emitido antes da revogação
-// deixa de valer sem precisar esperar as 2h de expiração.
+// deixa de valer sem precisar esperar os 15 minutos de expiração.
 async function exigirAdmin(req, res, next) {
     if (!bancoDisponivel) {
         return res.status(503).json({ mensagem: 'Banco de dados indisponível no momento.' });
@@ -982,13 +1142,13 @@ function criarTransportadoresFallbackEmail() {
     return configuracoes.map((configuracao) => nodemailer.createTransport(configuracao));
 }
 
-// O token de recuperação vai em claro no e-mail, mas só o hash dele é gravado.
-// Enquanto vale, ele troca a senha de qualquer conta, então merece o mesmo
-// cuidado da senha: um dump de password_resets com valores brutos daria acesso
-// a toda conta com pedido pendente. SHA-256 sem sal basta — o token tem 256
-// bits aleatórios, não há dicionário a atacar como numa senha escolhida por
-// gente. E bcrypt não serviria: com sal, não dá para buscar por WHERE token.
-function hashTokenRecuperacao(token) {
+// Hash dos tokens que dão acesso à conta: o de recuperação de senha (vai em
+// claro no e-mail) e o refresh token (vai em claro no cookie). O banco só vê o
+// hash, então um dump de password_resets ou de refresh_tokens não abre conta
+// nenhuma. SHA-256 sem sal basta — os tokens têm 256 bits aleatórios, não há
+// dicionário a atacar como numa senha escolhida por gente. E bcrypt não
+// serviria: com sal, não dá para buscar por WHERE token.
+function hashToken(token) {
     return crypto.createHash('sha256').update(String(token)).digest('hex');
 }
 
@@ -999,7 +1159,7 @@ async function criarTokenRecuperacao(usuarioId) {
 
     await pool.query(
         'INSERT INTO password_resets (usuario_id, token, expira_em) VALUES ($1, $2, $3)',
-        [usuarioId, hashTokenRecuperacao(token), expiraEm]
+        [usuarioId, hashToken(token), expiraEm]
     );
 
     return token;
@@ -1164,10 +1324,13 @@ async function iniciarServidor() {
 
     // resolverCorsOrigin aceita qualquer origem quando a lista está vazia. Não
     // trava a subida por uma variável opcional, mas também não falha aberto em
-    // silêncio: no Render ela é preenchida à mão e é fácil esquecer.
+    // silêncio: no Render ela é preenchida à mão e é fácil esquecer. Com a
+    // sessão em cookie (credentials: true), a origem aceita passa a poder
+    // fazer requisições com credencial — o SameSite=Lax dos cookies segura o
+    // envio a partir de outro site, mas a lista explícita é a defesa certa.
     if (corsOrigins.length === 0) {
         console.warn(
-            '[CORS] CORS_ORIGINS não configurado: aceitando requisições de qualquer origem. ' +
+            '[CORS] CORS_ORIGINS não configurado: aceitando requisições com credenciais de qualquer origem. ' +
             'Defina a variável para restringir em produção.'
         );
     }
@@ -1263,10 +1426,16 @@ app.post('/auth/cadastro', limitadorCadastro, async (req, res) => {
         }
 
         const senhaHash = await bcrypt.hash(senha, 10);
-        const resultado = await pool.query('INSERT INTO usuarios (nome, email, senha) VALUES ($1, $2, $3) RETURNING id', [nome, email, senhaHash]);
-        const usuarioId = resultado.rows[0].id;
-        await pool.query('INSERT INTO historico_compras (usuario_id, pedido, status) VALUES ($1, $2, $3)', [usuarioId, 'Pedido de boas-vindas', 'Em transporte']);
-        res.status(201).json({ mensagem: 'Conta criada com sucesso!' });
+        const resultado = await pool.query(
+            'INSERT INTO usuarios (nome, email, senha) VALUES ($1, $2, $3) RETURNING id, nome, email',
+            [nome, email, senhaHash]
+        );
+        const usuario = resultado.rows[0];
+        await pool.query('INSERT INTO historico_compras (usuario_id, pedido, status) VALUES ($1, $2, $3)', [usuario.id, 'Pedido de boas-vindas', 'Em transporte']);
+
+        // Quem acabou de criar a conta já sai logado.
+        await iniciarSessao(res, usuario);
+        res.status(201).json({ mensagem: 'Conta criada com sucesso!', usuario });
     } catch (erro) {
         console.error('Erro ao cadastrar usuário:', erro);
         res.status(500).json({ mensagem: 'Erro ao criar conta.' });
@@ -1294,12 +1463,143 @@ app.post('/auth/login', limitadorLogin, async (req, res) => {
             return res.status(401).json({ mensagem: 'E-mail ou senha inválidos.' });
         }
 
-        const token = jwt.sign({ id: usuario.id, email: usuario.email }, JWT_SECRET, { expiresIn: '2h' });
-        res.json({ mensagem: 'Login realizado com sucesso!', token, usuario: { id: usuario.id, nome: usuario.nome, email: usuario.email } });
+        // O token vai nos cookies, não no corpo: o JavaScript da página não
+        // precisa (nem deve) enxergá-lo.
+        await iniciarSessao(res, usuario);
+        res.json({ mensagem: 'Login realizado com sucesso!', usuario: { id: usuario.id, nome: usuario.nome, email: usuario.email } });
     } catch (erro) {
         console.error('Erro ao fazer login:', erro);
         res.status(500).json({ mensagem: 'Erro ao fazer login.' });
     }
+});
+
+// Troca o refresh token por um par novo (rotação). Não usa autenticarToken:
+// é chamada justamente quando o access token já venceu, e se autentica pelo
+// próprio cookie de refresh.
+app.post('/auth/refresh', async (req, res) => {
+    const bruto = req.cookies && req.cookies[COOKIE_REFRESH];
+
+    if (!bruto) {
+        return res.status(401).json({ mensagem: 'Sessão ausente ou expirada.' });
+    }
+
+    const cliente = await pool.connect();
+
+    try {
+        // Prazos comparados no banco, com o mesmo relógio que os gravou.
+        const achado = await cliente.query(
+            `SELECT id, usuario_id,
+                    revogado_em IS NOT NULL AS revogado,
+                    expira_em <= NOW() AS expirado,
+                    substituido_por IS NOT NULL AS rotacionado,
+                    substituido_por IS NOT NULL
+                        AND revogado_em > NOW() - make_interval(secs => $2) AS rotacionado_agora
+               FROM refresh_tokens
+              WHERE token_hash = $1`,
+            [hashToken(bruto), JANELA_CORRIDA_SEGUNDOS]
+        );
+
+        if (achado.rowCount === 0) {
+            limparCookiesDeSessao(res);
+            return res.status(401).json({ mensagem: 'Sessão ausente ou expirada.' });
+        }
+
+        const registro = achado.rows[0];
+
+        if (registro.revogado) {
+            // Corrida entre abas: outra acabou de rotacionar este token. Não
+            // limpa os cookies — o navegador já guarda os novos, emitidos para
+            // a outra aba, e limpar derrubaria a sessão que acabou de renovar.
+            if (registro.rotacionado_agora) {
+                return res.status(401).json({ mensagem: 'Sessão renovada por outra aba.' });
+            }
+
+            // Reuso de um token já TROCADO por outro: alguém mais tem uma cópia
+            // dele. Derruba todas as sessões da pessoa e obriga novo login.
+            if (registro.rotacionado) {
+                await revogarSessoesDoUsuario(cliente, registro.usuario_id);
+                console.warn(`[SESSAO] Reuso de refresh token do usuário ${registro.usuario_id}: todas as sessões revogadas.`);
+                limparCookiesDeSessao(res);
+                return res.status(401).json({ mensagem: 'Sessão encerrada por segurança. Entre novamente.' });
+            }
+
+            // Revogado por logout ou troca de senha: sessão encerrada, não sinal
+            // de roubo. Tratar como reuso seria desastroso — o dispositivo que
+            // ficou para trás, ao tentar renovar, derrubaria a sessão nova de
+            // quem acabou de trocar a senha.
+            limparCookiesDeSessao(res);
+            return res.status(401).json({ mensagem: 'Sessão encerrada. Entre novamente.' });
+        }
+
+        if (registro.expirado) {
+            limparCookiesDeSessao(res);
+            return res.status(401).json({ mensagem: 'Sessão expirada. Entre novamente.' });
+        }
+
+        await cliente.query('BEGIN');
+
+        // Reivindica o token de forma atômica. Se duas requisições chegarem
+        // juntas com ele, só uma passa daqui; a outra cai na corrida acima.
+        const reivindicado = await cliente.query(
+            'UPDATE refresh_tokens SET revogado_em = NOW() WHERE id = $1 AND revogado_em IS NULL RETURNING id',
+            [registro.id]
+        );
+
+        if (reivindicado.rowCount === 0) {
+            await cliente.query('ROLLBACK');
+            return res.status(401).json({ mensagem: 'Sessão renovada por outra aba.' });
+        }
+
+        const usuario = await cliente.query('SELECT id, nome, email FROM usuarios WHERE id = $1', [registro.usuario_id]);
+
+        if (usuario.rowCount === 0) {
+            await cliente.query('ROLLBACK');
+            limparCookiesDeSessao(res);
+            return res.status(401).json({ mensagem: 'Sessão ausente ou expirada.' });
+        }
+
+        const novo = await gravarRefreshToken(cliente, registro.usuario_id);
+        await cliente.query('UPDATE refresh_tokens SET substituido_por = $1 WHERE id = $2', [novo.id, registro.id]);
+        await cliente.query('COMMIT');
+
+        // O CSRF continua o mesmo durante a sessão. Trocá-lo a cada renovação
+        // abriria corrida com requisições de outras abas já montadas com o valor
+        // anterior; ele só nasce de novo quando a sessão nasce (login).
+        const csrf = (req.cookies && req.cookies[COOKIE_CSRF]) || crypto.randomBytes(32).toString('hex');
+
+        definirCookiesDeSessao(res, emitirAccessToken(usuario.rows[0]), novo.token, csrf);
+        return res.json({ usuario: usuario.rows[0] });
+    } catch (erro) {
+        await cliente.query('ROLLBACK').catch(() => {});
+        console.error('Erro ao renovar sessão:', erro);
+        return res.status(500).json({ mensagem: 'Não foi possível renovar a sessão.' });
+    } finally {
+        cliente.release();
+    }
+});
+
+// Encerra a sessão deste navegador. Sem autenticarToken, de propósito: sair
+// precisa funcionar mesmo com o access token já vencido, e a sessão a encerrar
+// é identificada pelo próprio cookie de refresh. Com cookie de sessão presente,
+// o middleware de CSRF já exigiu o token — um site de fora não força o logout.
+app.post('/auth/logout', async (req, res) => {
+    const bruto = req.cookies && req.cookies[COOKIE_REFRESH];
+
+    try {
+        if (bruto) {
+            await pool.query(
+                'UPDATE refresh_tokens SET revogado_em = NOW() WHERE token_hash = $1 AND revogado_em IS NULL',
+                [hashToken(bruto)]
+            );
+        }
+    } catch (erro) {
+        // Os cookies saem mesmo assim: o navegador fica deslogado, e o token
+        // que sobrou no banco expira sozinho.
+        console.error('Erro ao revogar sessão no logout:', erro);
+    }
+
+    limparCookiesDeSessao(res);
+    return res.json({ mensagem: 'Sessão encerrada.' });
 });
 
 app.get('/auth/me', autenticarToken, async (req, res) => {
@@ -1392,11 +1692,18 @@ app.post('/auth/alterar-senha', limitadorSenha, autenticarToken, async (req, res
             req.usuario.id
         ]);
 
-        // Tokens já emitidos continuam válidos até expirar: o JWT não é
-        // consultado no banco. Trocar a senha não derruba outras sessões.
+        // Derruba todas as sessões e abre uma nova para este navegador. Quem
+        // troca a senha costuma desconfiar de acesso indevido; sem isto, um
+        // refresh token roubado seguiria renovando a sessão por 30 dias.
+        const usuarioSessao = await pool.query('SELECT id, email FROM usuarios WHERE id = $1', [req.usuario.id]);
+        await revogarSessoesDoUsuario(pool, req.usuario.id);
+        await iniciarSessao(res, usuarioSessao.rows[0]);
+
+        // Os outros dispositivos ainda têm o access token, que não se revoga
+        // e dura até 15 minutos. A resposta diz isso em vez de prometer "na hora".
         return res.json({
             mensagem: 'Senha alterada com sucesso.',
-            aviso: 'Sessões abertas em outros dispositivos seguem ativas até expirarem.'
+            aviso: 'Sessões abertas em outros dispositivos serão encerradas em até 15 minutos.'
         });
     } catch (erro) {
         console.error('Erro ao alterar senha:', erro);
@@ -1464,7 +1771,7 @@ app.post('/auth/recuperar-senha', limitadorSenha, async (req, res) => {
             console.error('[RESET] envio SMTP falhou:', resultadoEnvio && resultadoEnvio.motivo ? resultadoEnvio.motivo : 'motivo não informado');
             // O banco guarda o hash, não o token: apagar pelo valor bruto não
             // acharia a linha e deixaria um link válido que ninguém recebeu.
-            await pool.query('DELETE FROM password_resets WHERE token = $1', [hashTokenRecuperacao(token)]);
+            await pool.query('DELETE FROM password_resets WHERE token = $1', [hashToken(token)]);
             return res.status(502).json({ mensagem: 'Não foi possível enviar o e-mail de recuperação no momento. Tente novamente mais tarde.' });
         }
 
@@ -1491,7 +1798,7 @@ app.post('/auth/redefinir-senha', limitadorSenha, async (req, res) => {
         // Compara hash com hash: o banco nunca viu o token bruto.
         const resultado = await pool.query(
             'SELECT id, usuario_id, expira_em, usado FROM password_resets WHERE token = $1',
-            [hashTokenRecuperacao(token)]
+            [hashToken(token)]
         );
 
         if (resultado.rowCount === 0) {
@@ -1516,6 +1823,9 @@ app.post('/auth/redefinir-senha', limitadorSenha, async (req, res) => {
             'UPDATE password_resets SET usado = TRUE WHERE usuario_id = $1 AND usado = FALSE',
             [reset.usuario_id]
         );
+        // Redefinir a senha é o caminho de quem perdeu o controle da conta.
+        // Sem revogar, quem tomou a sessão seguiria renovando-a por 30 dias.
+        await revogarSessoesDoUsuario(pool, reset.usuario_id);
 
         res.json({ mensagem: 'Senha redefinida com sucesso!' });
     } catch (erro) {

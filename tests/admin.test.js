@@ -9,7 +9,7 @@ const assert = require('node:assert/strict');
 const http = require('node:http');
 
 const { app } = require('../server.js');
-const { criarProduto, criarUsuario, emitirToken, definirAdmin, limpar, pool } = require('./ajuda.js');
+const { criarProduto, criarUsuario, emitirToken, cabecalhosDeSessao, definirAdmin, limpar, pool } = require('./ajuda.js');
 
 let servidor;
 let base;
@@ -27,7 +27,7 @@ function iniciar() {
 
 async function pedir(metodo, caminho, { token = null, corpo = null } = {}) {
     const cabecalhos = { 'Content-Type': 'application/json' };
-    if (token) cabecalhos.Authorization = `Bearer ${token}`;
+    if (token) Object.assign(cabecalhos, cabecalhosDeSessao(token));
 
     const resposta = await fetch(`${base}${caminho}`, {
         method: metodo,

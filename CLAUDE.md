@@ -9,8 +9,8 @@ coluna a coluna, a taxonomia de categorias, as 7 migrations e como criar o
 primeiro administrador. Aqui ficam as decisões e o porquê; lá, o schema.
 
 **Repositório:** https://github.com/Carl0sNeto/petabyte (público)
-**Última revisão deste documento:** 23/09/2026 (e-mail duplicado em `/usuarios`,
-correções de segurança na recuperação de senha e selo de desconto).
+**Última revisão deste documento:** 23/09/2026 (sessão em cookies httpOnly com
+refresh token).
 
 > A data acima já ficou parada em 17/08 enquanto o corpo do arquivo era alterado
 > em 22/08 e 09/09. Se você mexer neste documento, mexa nesta linha junto.
@@ -21,11 +21,11 @@ correções de segurança na recuperação de senha e selo de desconto).
 
 | Camada | Tecnologia |
 |--------|------------|
-| Servidor | Node.js 24 + Express 5, arquivo único `server.js` (~2.460 linhas) |
+| Servidor | Node.js 24 + Express 5, arquivo único `server.js` (~2.830 linhas) |
 | Banco | PostgreSQL, acesso via `pg` sem ORM |
 | Front-end | HTML + CSS + JavaScript puro, sem framework nem build |
 | Pagamento | Mercado Pago (Checkout Pro, por redirecionamento) |
-| Autenticação | JWT próprio, senha com bcrypt |
+| Autenticação | JWT de 15 min + refresh token rotativo, ambos em cookie httpOnly; senha com bcrypt |
 | Testes | `node:test` nativo, sem dependência extra |
 
 Não há etapa de build. Os arquivos em `public/` são servidos como estão.
@@ -38,7 +38,7 @@ seguinte.
 
 ```bash
 npm start           # sobe na porta 3000
-npm test            # 73 casos, em série, contra o banco real
+npm test            # 87 casos, em série, contra o banco real
 npm run migrate     # aplica migrations/*.sql em ordem
 npm run criar-admin -- email@exemplo.com    # promove uma conta a administrador
 ```
@@ -87,7 +87,7 @@ revisão manual em vez de falhar — o pagamento já foi aprovado nesse ponto.
 
 `exigirAdmin` consulta `usuarios.admin` em vez de ler do JWT. Isso torna a
 revogação imediata: um token emitido antes da revogação para de funcionar na
-hora, sem esperar as 2h de expiração.
+hora, sem esperar os 15 minutos de expiração do access token.
 
 Ninguém vira admin sozinho: o cadastro público sempre grava `FALSE` e a promoção
 passa por `npm run criar-admin`, que exige acesso ao servidor.
@@ -191,8 +191,56 @@ bastaria para tomar a conta, porque o JWT sozinho já autoriza tudo.
 O e-mail não é editável: é a identidade de login, e trocá-lo com segurança
 exigiria confirmação por link, que não funciona sem SMTP configurado.
 
-> Trocar a senha **não derruba** sessões abertas em outros dispositivos: o JWT
-> não é consultado no banco. A resposta avisa isso em vez de deixar subentendido.
+Trocar a senha **derruba as outras sessões**: revoga todos os refresh tokens da
+pessoa e abre uma sessão nova só para o navegador que trocou. Os outros
+dispositivos ainda têm o access token, que não se revoga, e caem em até 15
+minutos — a resposta diz exatamente isso, sem prometer "na hora". Redefinir a
+senha pelo e-mail revoga tudo, porque esse é o caminho de quem perdeu o
+controle da conta.
+
+### Sessão em cookies httpOnly, com refresh token rotativo
+
+O JWT saiu do `localStorage` e do header `Authorization`. Agora:
+
+| Cookie | httpOnly | Path | Dura | O que é |
+|--------|----------|------|------|---------|
+| `access_token` | sim | `/` | 15 min | JWT `{ id, email }`, lido por `autenticarToken`. Não se revoga |
+| `refresh_token` | sim | `/auth` | 30 dias | Aleatório; só o SHA-256 fica em `refresh_tokens` |
+| `csrf_token` | **não** | `/` | 30 dias | Double-submit: o front o devolve no header `X-CSRF-Token` |
+
+Todos com `SameSite=Lax` e `Secure` quando `NODE_ENV=production`. `Lax`, e não
+`Strict`, porque a volta do Mercado Pago é navegação vinda de outro domínio, e
+com `Strict` a pessoa chegaria deslogada exatamente ao voltar de pagar.
+
+Decisões que não são óbvias, e onde o desenho saiu da spec original:
+
+- **`Path=/auth`, não `/auth/refresh`.** O logout precisa ler o refresh token
+  para revogá-lo, e com `Path=/auth/refresh` o navegador nunca o mandaria para
+  `/auth/logout`.
+- **CSRF só com cookie de sessão presente.** CSRF é abuso da credencial que o
+  navegador anexa sozinho; sem cookie de sessão não há o que abusar, e a rota
+  responde 401, o que deixa o front renovar em vez de mostrar um 403 sem sentido.
+  As rotas de entrada (`/auth/login`, `/auth/cadastro`, `/usuarios`, recuperação
+  e redefinição de senha, webhook) ficam isentas: o `csrf_token` nasce no login,
+  e exigi-lo no próprio login impediria o primeiro acesso.
+- **Reuso só conta para token rotacionado.** Apresentar um refresh token que já
+  foi *trocado por outro* é sinal de cópia: derruba todas as sessões. Um token
+  revogado por logout ou troca de senha é só sessão encerrada — tratá-lo como
+  reuso fazia o dispositivo que ficou para trás derrubar a sessão nova de quem
+  acabou de trocar a senha. A coluna `substituido_por` é o que distingue os dois.
+- **Janela de corrida de 60 segundos.** Duas abas com o access vencido mandam o
+  mesmo refresh token juntas; a segunda recebe 401 sem derrubar nada, e usa os
+  cookies que a primeira já renovou. Nenhum token novo sai nesse caso.
+- **Logout sem `autenticarToken`.** Sair precisa funcionar com o access token já
+  vencido; a sessão é identificada pelo próprio cookie de refresh.
+- **Prazos comparados no banco.** `expira_em` e `revogado_em` vêm de `NOW()`, e
+  as comparações também. Misturar relógio do Node com `TIMESTAMP` sem fuso daria
+  horas de erro com processo e banco em fusos diferentes (Render e Neon em UTC,
+  máquina local em -03:00).
+
+> O `localStorage` guarda só `petabyte-user` (nome, e-mail, id), como cache de
+> exibição do cabeçalho. `hasValidSession()` é otimista por isso; quem decide é
+> o servidor, na primeira rota autenticada que a página chamar.
 
 ### O token de recuperação é tratado como senha
 
@@ -201,7 +249,8 @@ Enquanto vale (30 minutos), o token do e-mail troca a senha da conta. Por isso
 do banco não dá acesso a conta nenhuma. SHA-256 sem sal basta porque o token
 tem 256 bits aleatórios; bcrypt não serviria, porque com sal não dá para buscar
 por `WHERE token = $1`. Qualquer consulta ou `DELETE` pelo token precisa passar
-por `hashTokenRecuperacao()` — pelo valor bruto não acha nada, em silêncio.
+por `hashToken()` — pelo valor bruto não acha nada, em silêncio. A mesma função
+serve ao refresh token da sessão.
 
 Usar um link invalida **todos** os pedidos pendentes da pessoa, não só o
 clicado. E nenhum log do fluxo leva e-mail, token ou link: o log sai idêntico
@@ -291,6 +340,7 @@ mente — **com o banco fora, o health check continua verde**.
 | `CHECKOUT_HABILITADO` | `false` desliga o pagamento |
 | `APP_BASE_URL` | Preencher com a URL do Render após o primeiro deploy |
 | `JWT_SECRET` | Gerado pelo Render (`generateValue`), nunca versionado |
+| `NODE_ENV` | `production` liga o `Secure` dos cookies de sessão (só vão por HTTPS) |
 
 `DATABASE_SSL` saiu da lista: com `sslmode` na URL do Neon, ela não faz nada.
 
@@ -336,20 +386,27 @@ idempotente, então repetir a cada deploy é seguro.
 
 São **de integração**: batem no banco configurado no `.env`, não em mocks.
 
-Seis arquivos, cada um com um `test()` de nível superior e os casos como
+Sete arquivos, cada um com um `test()` de nível superior e os casos como
 subtestes (`await t.test(...)`):
 
 | Arquivo | Casos | Cobre |
 |---------|-------|-------|
 | `tests/admin.test.js` | 18 | Rotas `/admin/*`, permissão, CRUD de produto, tags, paginação |
+| `tests/auth-sessao.test.js` | 13 | Cookies, rotação, reuso, janela de corrida, logout, CSRF, revogação por senha |
 | `tests/produto.test.js` | 13 | Página de detalhe, galeria, avaliações e quem pode avaliar |
 | `tests/checkout.test.js` | 12 | Resolução do carrinho, preço do banco, estoque, frete |
 | `tests/conta.test.js` | 12 | Central da conta: nome, troca de senha, avaliações próprias; cadastro de newsletter |
 | `tests/estoque.test.js` | 8 | Baixa, idempotência, devolução por estorno |
 | `tests/recuperacao.test.js` | 4 | Token gravado como hash, invalidação dos links pendentes |
 
-São 67 subtestes mais os 6 de nível superior — daí os 73 que o runner conta
+São 80 subtestes mais os 7 de nível superior — daí os 87 que o runner conta
 (conferido rodando a suíte em 23/09/2026).
+
+- **Autenticação por cookie, como o navegador.** `cabecalhosDeSessao(token)`, em
+  `tests/ajuda.js`, monta o cookie `access_token` e o CSRF em dobro. O header
+  `Authorization` não autentica mais — há um teste que garante isso.
+- `auth-sessao.test.js` simula cada navegador como um pote de cookies que
+  respeita `Path` e expiração. É o que prova que o refresh token chega ao logout.
 
 - Rodam em série (`--test-concurrency=1`).
 - As fixtures usam prefixo com o **pid do processo**. O runner do Node executa
@@ -360,7 +417,8 @@ São 67 subtestes mais os 6 de nível superior — daí os 73 que o runner conta
 - **O rate limit vale dentro dos testes.** O `limitadorSenha` permite 5
   requisições por hora, somando `/auth/alterar-senha`, `/auth/recuperar-senha` e
   `/auth/redefinir-senha`. `conta.test.js` já gasta as 5; `recuperacao.test.js`
-  gasta 4. A sexta recebe 429 e o teste falha sem motivo aparente. Como cada
+  gasta 4; `auth-sessao.test.js`, 2. A sexta recebe 429 e o teste falha sem
+  motivo aparente. Como cada
   arquivo roda em processo próprio, o contador zera entre arquivos — por isso a
   recuperação de senha tem arquivo separado.
 - **O `.env` local tem SMTP de verdade.** `recuperacao.test.js` apaga as
@@ -379,13 +437,21 @@ São sete páginas: `E-Commerce.html` (vitrine, servida como índice), `cart.htm
 `produto.html`, `auth.html`, `redefinir-senha.html`, `perfil.html` e
 `admin.html`.
 
+- `public/sessao.js` — **carrega primeiro em toda página** (antes de `script.js`
+  e de `admin.js`). Base da API, cache do usuário e `chamarApi()`, a única
+  chamada autenticada da aplicação: manda cookies e `X-CSRF-Token`, em 401
+  renova a sessão uma vez e repete a chamada uma vez. Várias chamadas com 401 ao
+  mesmo tempo esperam a mesma renovação. Arquivo próprio porque o painel não
+  carrega `script.js`, e essa lógica não pode existir em cópias que divergem.
+- Login e cadastro usam `requisitar()`, sem retry: ali 401 é senha errada, não
+  sessão vencida. Páginas com tela própria de "sem sessão" (conta, painel)
+  chamam `chamarApi(..., { redirecionarSeDeslogado: false })`.
 - `public/produto.html` + `produto.js` — página de detalhe, aberta pela vitrine
   em `produto.html?id=N`. Carrega **depois** de `script.js`, de quem reaproveita
-  `apiUrl`, `escapeHtml`, `formatCurrency` e `addToCart`.
+  `escapeHtml`, `formatCurrency`, `addToCart` e `renderDesconto`.
 - `public/perfil.html` + `conta.js` — central da conta, em três abas dentro da
   mesma página (Minhas compras, Minhas avaliações, Configurações). Também carrega
-  **depois** de `script.js`, reaproveitando `apiUrl`, `lerResposta`,
-  `escapeHtml`, `iniciaisDoNome`, `hasValidSession` e `logoutUser`.
+  **depois** de `script.js`, reaproveitando `escapeHtml` e `iniciaisDoNome`.
 - Estrelas são SVG inline, não o caractere `★`: o glifo muda de desenho conforme
   a fonte instalada e não existe meia estrela em texto.
 - `renderDesconto()` em `script.js` é o único lugar que monta preço riscado e
