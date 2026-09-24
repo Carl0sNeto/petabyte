@@ -73,7 +73,8 @@ function renderGaleria(produto) {
 }
 
 function renderCaixaCompra(produto, resumo, checkoutHabilitado) {
-    const temDesconto = produto.descontoPercentual && produto.precoOriginal;
+    // Mesma regra e mesmo HTML do card da vitrine, vindos de script.js.
+    const desconto = renderDesconto(produto);
     const parcela = produto.preco / 12;
 
     let estoque = '<span class="estoque estoque-fora">Indisponível no momento</span>';
@@ -92,10 +93,11 @@ function renderCaixaCompra(produto, resumo, checkoutHabilitado) {
 
     return `
         <aside class="caixa-compra">
-            ${temDesconto ? `<div class="preco-antigo">De ${formatCurrency(produto.precoOriginal)}</div>` : ''}
-            <span class="preco-atual">${formatCurrency(produto.preco)}${
-                temDesconto ? `<span class="selo-desconto">-${produto.descontoPercentual}%</span>` : ''
-            }</span>
+            ${desconto.precoAntigo
+                // O "De" é só visual: o leitor de tela já ouve "Preço original:".
+                ? `<div class="preco-de"><span aria-hidden="true">De </span>${desconto.precoAntigo}</div>`
+                : ''}
+            <span class="preco-atual">${formatCurrency(produto.preco)}${desconto.selo}</span>
             <p class="parcelamento">ou 12x de ${formatCurrency(parcela)} sem juros</p>
             ${estoque}
             ${botao}

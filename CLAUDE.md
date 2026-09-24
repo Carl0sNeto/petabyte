@@ -9,7 +9,8 @@ coluna a coluna, a taxonomia de categorias, as 7 migrations e como criar o
 primeiro administrador. Aqui ficam as decisões e o porquê; lá, o schema.
 
 **Repositório:** https://github.com/Carl0sNeto/petabyte (público)
-**Última revisão deste documento:** 22/09/2026 (migração do banco para o Neon).
+**Última revisão deste documento:** 23/09/2026 (e-mail duplicado em `/usuarios`,
+correções de segurança na recuperação de senha e selo de desconto).
 
 > A data acima já ficou parada em 17/08 enquanto o corpo do arquivo era alterado
 > em 22/08 e 09/09. Se você mexer neste documento, mexa nesta linha junto.
@@ -37,7 +38,7 @@ seguinte.
 
 ```bash
 npm start           # sobe na porta 3000
-npm test            # 66 casos, em série, contra o banco real
+npm test            # 73 casos, em série, contra o banco real
 npm run migrate     # aplica migrations/*.sql em ordem
 npm run criar-admin -- email@exemplo.com    # promove uma conta a administrador
 ```
@@ -110,6 +111,29 @@ evita que a loja e o painel inventem traduções próprias.
 `GET /produtos` devolve só as categorias que têm produto à venda, e a loja monta
 os filtros a partir daí. Não há categoria fixa no HTML.
 
+### O desconto anunciado arredonda para baixo
+
+O selo aparece quando `preco_original > preco`, com o percentual por
+`Math.floor`: um desconto real de 14,6% vira "-14%", nunca "-15%". Anunciar
+mais do que o real é propaganda enganosa, então a conta erra sempre a favor de
+subestimar. O painel, por sua vez, recusa `preco_original` menor ou igual ao
+preço.
+
+A conta é feita em **centavos inteiros**. Em ponto flutuante,
+`(1 - 80 / 100) * 100` dá `19.999999999999996`, e o floor transformaria 20% reais
+em "-19%". Abaixo de 1% o preço antigo aparece riscado, mas sem selo — "-0%"
+não é selo que se mostre.
+
+A regra mora **só** em `calcularDescontoPercentual()` e `renderDesconto()`, em
+`public/script.js`, usadas pelo card da vitrine e pela página de produto. O
+servidor devolve `preco` e `precoOriginal` e não calcula percentual — já
+calculou, com `Math.round`, e era a segunda cópia divergente da regra.
+
+> Para leitor de tela o riscado é `<del>` com texto oculto ("Preço original:"),
+> não `aria-label`: a especificação ARIA proíbe nome acessível em `<del>` e em
+> `<span>`, e os leitores o ignoram ali. O "-21%" visual fica `aria-hidden` —
+> colado no preço, seria lido como subtração.
+
 ### Nada de diálogos nativos do navegador
 
 `window.confirm()` e `alert()` podem ser **suprimidos** pelo navegador — o
@@ -169,6 +193,20 @@ exigiria confirmação por link, que não funciona sem SMTP configurado.
 
 > Trocar a senha **não derruba** sessões abertas em outros dispositivos: o JWT
 > não é consultado no banco. A resposta avisa isso em vez de deixar subentendido.
+
+### O token de recuperação é tratado como senha
+
+Enquanto vale (30 minutos), o token do e-mail troca a senha da conta. Por isso
+`password_resets.token` guarda o **SHA-256** dele, nunca o valor bruto: um dump
+do banco não dá acesso a conta nenhuma. SHA-256 sem sal basta porque o token
+tem 256 bits aleatórios; bcrypt não serviria, porque com sal não dá para buscar
+por `WHERE token = $1`. Qualquer consulta ou `DELETE` pelo token precisa passar
+por `hashTokenRecuperacao()` — pelo valor bruto não acha nada, em silêncio.
+
+Usar um link invalida **todos** os pedidos pendentes da pessoa, não só o
+clicado. E nenhum log do fluxo leva e-mail, token ou link: o log sai idêntico
+exista a conta ou não, para não revelar no servidor o que a resposta genérica
+esconde do cliente.
 
 ### `express.static` serve apenas `public/`
 
@@ -298,7 +336,7 @@ idempotente, então repetir a cada deploy é seguro.
 
 São **de integração**: batem no banco configurado no `.env`, não em mocks.
 
-Cinco arquivos, cada um com um `test()` de nível superior e os casos como
+Seis arquivos, cada um com um `test()` de nível superior e os casos como
 subtestes (`await t.test(...)`):
 
 | Arquivo | Casos | Cobre |
@@ -306,10 +344,12 @@ subtestes (`await t.test(...)`):
 | `tests/admin.test.js` | 18 | Rotas `/admin/*`, permissão, CRUD de produto, tags, paginação |
 | `tests/produto.test.js` | 13 | Página de detalhe, galeria, avaliações e quem pode avaliar |
 | `tests/checkout.test.js` | 12 | Resolução do carrinho, preço do banco, estoque, frete |
-| `tests/conta.test.js` | 10 | Central da conta: nome, troca de senha, avaliações próprias |
+| `tests/conta.test.js` | 12 | Central da conta: nome, troca de senha, avaliações próprias; cadastro de newsletter |
 | `tests/estoque.test.js` | 8 | Baixa, idempotência, devolução por estorno |
+| `tests/recuperacao.test.js` | 4 | Token gravado como hash, invalidação dos links pendentes |
 
-São 61 subtestes mais os 5 de nível superior — daí os 66 que o runner conta.
+São 67 subtestes mais os 6 de nível superior — daí os 73 que o runner conta
+(conferido rodando a suíte em 23/09/2026).
 
 - Rodam em série (`--test-concurrency=1`).
 - As fixtures usam prefixo com o **pid do processo**. O runner do Node executa
@@ -317,6 +357,15 @@ São 61 subtestes mais os 5 de nível superior — daí os 66 que o runner conta
   arquivo apagava as fixtures do outro e os `DELETE` concorrentes travavam em
   deadlock.
 - `tests/admin.test.js` sobe o app Express numa porta efêmera, sem abrir 3000.
+- **O rate limit vale dentro dos testes.** O `limitadorSenha` permite 5
+  requisições por hora, somando `/auth/alterar-senha`, `/auth/recuperar-senha` e
+  `/auth/redefinir-senha`. `conta.test.js` já gasta as 5; `recuperacao.test.js`
+  gasta 4. A sexta recebe 429 e o teste falha sem motivo aparente. Como cada
+  arquivo roda em processo próprio, o contador zera entre arquivos — por isso a
+  recuperação de senha tem arquivo separado.
+- **O `.env` local tem SMTP de verdade.** `recuperacao.test.js` apaga as
+  variáveis `SMTP_*` do próprio processo para não mandar e-mail aos endereços
+  de fixture. Qualquer teste novo que passe por envio de e-mail precisa do mesmo.
 
 O teste mais importante é o que envia preço adulterado no checkout e verifica
 que o servidor usa o preço do banco. Ele existe para impedir a regressão da
@@ -339,6 +388,11 @@ São sete páginas: `E-Commerce.html` (vitrine, servida como índice), `cart.htm
   `escapeHtml`, `iniciaisDoNome`, `hasValidSession` e `logoutUser`.
 - Estrelas são SVG inline, não o caractere `★`: o glifo muda de desenho conforme
   a fonte instalada e não existe meia estrela em texto.
+- `renderDesconto()` em `script.js` é o único lugar que monta preço riscado e
+  selo. Página nova que mostre preço (um catálogo, por exemplo) usa ela, não
+  refaz a conta.
+- `.so-leitor` em `estilos.css` é o texto só para leitor de tela. Use onde
+  `aria-label` não vale (`<del>`, `<span>` genérico).
 - `public/estilos.css` — sistema de design compartilhado por todas as páginas.
   Base marinho, azul para ações, **laranja exclusivo para preço e oferta**.
   Diluir o laranja em outros elementos mata o destaque.
@@ -362,7 +416,9 @@ vazamento é o primeiro suspeito.
 
 Proteções em vigor: `helmet` com CSP, rate limit em login, recuperação de senha,
 cadastro, painel e webhook; `JWT_SECRET` obrigatório com mínimo de 32
-caracteres; `UNIQUE` em `usuarios.email`.
+caracteres; `UNIQUE` em `usuarios.email`; token de recuperação gravado como
+hash; aviso no log de subida quando `CORS_ORIGINS` está vazia (nesse caso
+qualquer origem é aceita).
 
 ---
 

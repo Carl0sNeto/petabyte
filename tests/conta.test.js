@@ -1,4 +1,5 @@
 // Central da conta: editar dados, trocar senha e listar as próprias avaliações.
+// Também cobre o cadastro de newsletter (POST /usuarios), que cria contas.
 //
 // O ponto sensível é a troca de senha. Ela exige a senha atual — sem isso um
 // token vazado bastaria para tomar a conta, já que o JWT sozinho autoriza tudo.
@@ -194,5 +195,36 @@ test('central da conta', async (t) => {
         assert.equal(dados.avaliacoes[0].produto.ativo, false, 'a interface usa isto para não criar link quebrado');
 
         await pool.query('UPDATE produtos SET ativo = TRUE WHERE id = $1', [produto.id]);
+    });
+
+    await t.test('newsletter com e-mail já cadastrado responde 200 sem tocar na conta', async () => {
+        const existente = await criarUsuario();
+        const antes = await pool.query('SELECT nome, senha FROM usuarios WHERE id = $1', [existente.id]);
+
+        // A senha no corpo é o caso perigoso: se este caminho virasse upsert,
+        // o formulário de newsletter redefiniria a senha de qualquer conta.
+        const { status, dados } = await pedir('POST', '/usuarios', {
+            corpo: { nome: 'Outro Nome', email: existente.email, senha: 'TentativaDeTroca123' }
+        });
+
+        assert.equal(status, 200, 'e-mail repetido não é falha do servidor');
+        assert.equal(dados.mensagem, 'Usuário salvo com sucesso!');
+
+        const depois = await pool.query('SELECT nome, senha FROM usuarios WHERE email = $1', [existente.email]);
+        assert.equal(depois.rowCount, 1, 'não pode duplicar a conta');
+        assert.equal(depois.rows[0].nome, antes.rows[0].nome, 'o nome não pode ser sobrescrito');
+        assert.equal(depois.rows[0].senha, antes.rows[0].senha, 'a senha não pode ser sobrescrita');
+    });
+
+    await t.test('newsletter com e-mail novo continua criando a conta', async () => {
+        // Prefixo do limpar(), para a conta criada pela rota sair no after.
+        const email = `${PREFIXO}newsletter_${Date.now()}@local.test`;
+
+        const { status } = await pedir('POST', '/usuarios', { corpo: { nome: 'Assinante Novo', email } });
+
+        assert.equal(status, 201);
+
+        const criada = await pool.query('SELECT count(*)::int AS n FROM usuarios WHERE email = $1', [email]);
+        assert.equal(criada.rows[0].n, 1);
     });
 });
