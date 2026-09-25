@@ -217,8 +217,10 @@ test('central da conta', async (t) => {
     });
 
     await t.test('newsletter com e-mail novo continua criando a conta', async () => {
-        // Prefixo do limpar(), para a conta criada pela rota sair no after.
-        const email = `${PREFIXO}newsletter_${Date.now()}@local.test`;
+        // Prefixo do limpar(), para a conta criada pela rota sair no after; e
+        // um provedor da lista, porque é conta nova. A newsletter não manda
+        // e-mail, então o endereço nunca é usado de verdade.
+        const email = `${PREFIXO}newsletter_${Date.now()}@gmail.com`;
 
         const { status } = await pedir('POST', '/usuarios', { corpo: { nome: 'Assinante Novo', email } });
 

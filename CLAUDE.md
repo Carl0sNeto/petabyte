@@ -9,8 +9,8 @@ coluna a coluna, a taxonomia de categorias, as 7 migrations e como criar o
 primeiro administrador. Aqui ficam as decisões e o porquê; lá, o schema.
 
 **Repositório:** https://github.com/Carl0sNeto/petabyte (público)
-**Última revisão deste documento:** 23/09/2026 (sessão em cookies httpOnly com
-refresh token).
+**Última revisão deste documento:** 24/09/2026 (login com Google, cupons de
+desconto, confirmação de e-mail no cadastro e fim do frete grátis).
 
 > A data acima já ficou parada em 17/08 enquanto o corpo do arquivo era alterado
 > em 22/08 e 09/09. Se você mexer neste documento, mexa nesta linha junto.
@@ -21,11 +21,11 @@ refresh token).
 
 | Camada | Tecnologia |
 |--------|------------|
-| Servidor | Node.js 24 + Express 5, arquivo único `server.js` (~2.830 linhas) |
+| Servidor | Node.js 24 + Express 5, arquivo único `server.js` (~3.500 linhas) |
 | Banco | PostgreSQL, acesso via `pg` sem ORM |
 | Front-end | HTML + CSS + JavaScript puro, sem framework nem build |
 | Pagamento | Mercado Pago (Checkout Pro, por redirecionamento) |
-| Autenticação | JWT de 15 min + refresh token rotativo, ambos em cookie httpOnly; senha com bcrypt |
+| Autenticação | JWT de 15 min + refresh token rotativo, ambos em cookie httpOnly; senha com bcrypt ou login com Google |
 | Testes | `node:test` nativo, sem dependência extra |
 
 Não há etapa de build. Os arquivos em `public/` são servidos como estão.
@@ -38,7 +38,7 @@ seguinte.
 
 ```bash
 npm start           # sobe na porta 3000
-npm test            # 87 casos, em série, contra o banco real
+npm test            # 129 casos, em série, contra o banco real
 npm run migrate     # aplica migrations/*.sql em ordem
 npm run criar-admin -- email@exemplo.com    # promove uma conta a administrador
 ```
@@ -74,6 +74,41 @@ nome e preço da tabela `produtos` em `resolverItensCarrinho()` e descarta
 qualquer preço recebido. O carrinho no navegador não guarda preço nenhum.
 
 > Nunca reintroduza preço, nome ou total vindos do cliente em rota de pagamento.
+
+### O cupom segue a mesma regra: o desconto nunca vem do cliente
+
+O carrinho manda só o **código**. `prepararCheckout()` é a única conta do
+pedido — itens e preços do banco, desconto recalculado do zero — e tanto
+`/cupons/validar` (a prévia no carrinho) quanto `/pagamentos/criar` passam por
+ela. A prévia e o valor cobrado são, por construção, a mesma conta; um
+`desconto` ou `total` no corpo nem é lido.
+
+Decisões que não são óbvias:
+
+- **Dinheiro em centavos inteiros.** Somas e percentuais em ponto flutuante
+  deixam resíduos que viram um centavo a mais ou a menos.
+- **O frete é fixo (R$ 19,90) e o cupom não mexe nele.** Não há mais faixa de
+  frete grátis: a loja trocou esse incentivo pelos cupons. Um cupom de 100%
+  zera os produtos e deixa só o frete a pagar. `calcularFrete()` no servidor e
+  `getShipping()` em `script.js` guardam o valor; mudou num, muda no outro.
+- **O Mercado Pago não aceita item de preço negativo nem zero.** Com cupom, os
+  produtos vão num item só, já descontado, mais o frete; se o cupom zera os
+  produtos, vai só o frete. A soma dos itens é sempre o total do pedido (há
+  teste para isso). A recusa de pedido de valor zero ficou como rede, para o
+  dia em que o frete puder ser zero de novo.
+- **O uso conta na aprovação, não na criação** — `cupom_contabilizado` é o
+  espelho de `estoque_baixado`, na mesma transação. Carrinho abandonado não
+  consome vaga; estorno, cancelamento e chargeback devolvem. Dois pedidos
+  abertos podem disputar a última vaga: como no estoque, o pagamento já foi
+  aprovado quando isso aparece, então o uso é gravado e o excesso vai para o log.
+- **Validade em `TIMESTAMPTZ`.** É um instante. Com `TIMESTAMP` sem fuso, um
+  cupom "até 23:59" cadastrado no Brasil venceria às 20:59, porque o Neon
+  compara com `NOW()` em UTC. O painel converte o horário local na hora de
+  gravar e de exibir.
+- **O rate limit só conta código inexistente** (`limitadorCupom`): é assim que
+  se descobre cupom no chute. O carrinho revalida o cupom a cada mudança de
+  quantidade, e isso, com código real, não gasta nada.
+- **Exige login.** O limite por cliente precisa saber quem é o cliente.
 
 ### Baixa de estoque é idempotente
 
@@ -188,6 +223,10 @@ mais correto: carrinho e conta são ações, não links de navegação.
 nova. Sem isso, um token vazado — sessão esquecida em máquina compartilhada —
 bastaria para tomar a conta, porque o JWT sozinho já autoriza tudo.
 
+A única exceção é a conta criada pelo Google, que ainda não tem senha
+(`senha IS NULL`): ali a rota vira "definir a primeira senha", sem senha atual a
+conferir. Há teste garantindo que a exceção não afrouxou o caso normal.
+
 O e-mail não é editável: é a identidade de login, e trocá-lo com segurança
 exigiria confirmação por link, que não funciona sem SMTP configurado.
 
@@ -241,6 +280,73 @@ Decisões que não são óbvias, e onde o desenho saiu da spec original:
 > O `localStorage` guarda só `petabyte-user` (nome, e-mail, id), como cache de
 > exibição do cabeçalho. `hasValidSession()` é otimista por isso; quem decide é
 > o servidor, na primeira rota autenticada que a página chamar.
+
+### Login com Google: conferido na Google, sem biblioteca
+
+O botão é o do Google Identity Services, que entrega uma credencial assinada
+direto no navegador. `POST /auth/google` a confere no endpoint público
+`oauth2.googleapis.com/tokeninfo` — sem dependência e sem client secret, só o
+`GOOGLE_CLIENT_ID`, que não é segredo — e checa `aud` (emitida para *este*
+aplicativo), `iss`, `exp` e `email_verified`. Mesmo raciocínio do webhook:
+nada que chega do navegador vale sem reconferir na fonte. Depois disso a sessão
+é idêntica à do login com senha.
+
+- **Ordem:** `google_id` (o `sub`, estável mesmo que o e-mail mude na Google) →
+  mesmo e-mail, ignorando maiúsculas → conta nova, com `senha = NULL` e
+  `admin = FALSE`.
+- **E-mail já ligado a *outra* conta Google** responde 409, em vez de trocar o
+  vínculo em silêncio e entregar a conta a quem chegou por último.
+- **Login com senha numa conta sem senha** explica o caminho (botão do Google
+  ou "Esqueci minha senha"); comparar bcrypt com `NULL` estourava 500.
+- **Desconectar exige senha definida**, com a condição no próprio `UPDATE`:
+  sem senha, a conta ficaria sem nenhuma forma de entrar.
+- **O CSP precisa de quatro entradas, não duas:** `script-src` (`/gsi/client`),
+  `style-src` (`/gsi/style`), `frame-src` e `connect-src` (`/gsi/`), conforme a
+  documentação do Google. E o `Referrer-Policy` do helmet (`no-referrer`)
+  quebrava o botão: o Google exige `strict-origin-when-cross-origin` em
+  produção e `no-referrer-when-downgrade` em `http://localhost`. Sem qualquer
+  um, o botão some sem erro visível — só no console.
+
+- **Vínculo com conta de e-mail nunca confirmado desativa a senha dela.** Essa
+  senha foi definida por alguém que não provou ser dono do endereço — talvez
+  outra pessoa, cadastrando o e-mail alheio de antemão (pré-sequestro). Quem
+  prova agora é a Google: a senha vira `NULL` e as sessões caem. Conta já
+  confirmada mantém a senha.
+
+### Cadastro com senha: e-mail confirmado, provedor conhecido, senha forte
+
+A conta criada com senha nasce com `email_verificado = FALSE` e **não entra**
+até a pessoa clicar no link enviado por e-mail. O login confere a senha
+**antes** de dizer que falta confirmar (código `email_nao_verificado`), para
+ninguém descobrir o estado de uma conta sem saber a senha dela.
+
+- **Só provedores conhecidos** (`DOMINIOS_EMAIL_PERMITIDOS`): Gmail, Outlook,
+  Hotmail, Live, Yahoo, iCloud, AOL, Proton, UOL, BOL, Terra, iG. Lista do que é
+  aceito, e não do que é proibido: serviços de e-mail temporário surgem todo
+  dia, os grandes provedores não. Vale no cadastro e na newsletter (conta
+  nova); não vale no Google, cujo e-mail já vem confirmado.
+- **Senha:** 8 a 72 caracteres (o bcrypt ignora o que passa de 72 bytes), com
+  letras e números, fora de uma lista curta de senhas óbvias e sem conter o
+  usuário do e-mail. `validarForcaSenha()` é a regra única do cadastro, da troca
+  e da redefinição — para ninguém criar pela porta dos fundos a senha que a da
+  frente recusa.
+- **O link vale 24 horas**, com hash no banco (`verificacoes_email`), e um link
+  novo invalida os anteriores. A página `verificar-email.html` confirma num
+  **clique**, não sozinha: filtros de e-mail abrem links e rodam JavaScript.
+- **Reenviar exige a senha**, para a rota não virar um jeito de disparar
+  e-mails para qualquer endereço.
+- **Redefinir a senha pelo link também confirma o e-mail.** É o caminho de quem
+  teve o e-mail cadastrado por outra pessoa: a senha que vale passa a ser a dela.
+- **Se o e-mail de confirmação não sai, a conta é desfeita** (502). Uma conta
+  que nunca poderia ser confirmada não pode ocupar o endereço. Consequência:
+  **sem SMTP configurado, ninguém cria conta com senha** — só com o Google.
+- **Contas que já existiam entraram como confirmadas**, uma única vez, pelo
+  truque da migration 012 (`ADD COLUMN ... DEFAULT TRUE` seguido de
+  `SET DEFAULT FALSE`). Um `UPDATE` ali confirmaria toda conta pendente a cada
+  deploy, porque o runner roda tudo de novo.
+
+O e-mail de conta nova é gravado em minúsculas, e login, recuperação e cadastro
+comparam ignorando maiúsculas.
 
 ### O token de recuperação é tratado como senha
 
@@ -340,7 +446,9 @@ mente — **com o banco fora, o health check continua verde**.
 | `CHECKOUT_HABILITADO` | `false` desliga o pagamento |
 | `APP_BASE_URL` | Preencher com a URL do Render após o primeiro deploy |
 | `JWT_SECRET` | Gerado pelo Render (`generateValue`), nunca versionado |
-| `NODE_ENV` | `production` liga o `Secure` dos cookies de sessão (só vão por HTTPS) |
+| `NODE_ENV` | `production` liga o `Secure` dos cookies de sessão (só vão por HTTPS) e o `Referrer-Policy` de produção |
+| `GOOGLE_CLIENT_ID` | Client ID do login com Google (`sync: false`). Vazio esconde o botão. A URL do deploy precisa constar em "Origens JavaScript autorizadas" no Google Cloud Console |
+| `SMTP_*` | Envio de e-mail (`sync: false`). **Sem ele ninguém cria conta com senha**: o cadastro exige confirmar o e-mail. Também leva a recuperação de senha |
 
 `DATABASE_SSL` saiu da lista: com `sslmode` na URL do Neon, ela não faz nada.
 
@@ -386,21 +494,36 @@ idempotente, então repetir a cada deploy é seguro.
 
 São **de integração**: batem no banco configurado no `.env`, não em mocks.
 
-Sete arquivos, cada um com um `test()` de nível superior e os casos como
+Nove arquivos, cada um com um `test()` de nível superior e os casos como
 subtestes (`await t.test(...)`):
 
 | Arquivo | Casos | Cobre |
 |---------|-------|-------|
-| `tests/admin.test.js` | 18 | Rotas `/admin/*`, permissão, CRUD de produto, tags, paginação |
-| `tests/auth-sessao.test.js` | 13 | Cookies, rotação, reuso, janela de corrida, logout, CSRF, revogação por senha |
+| `tests/admin.test.js` | 24 | Rotas `/admin/*`, permissão, CRUD de produto e de cupom, paginação, `/cupons/validar` |
+| `tests/checkout.test.js` | 21 | Carrinho, preço do banco, estoque, frete fixo; cupom: desconto, limites, motivos, uso e estorno |
+| `tests/login-google.test.js` | 15 | Criação, vínculo por e-mail (e com conta não confirmada), `aud`/`email_verified`, conta sem senha, desconectar |
 | `tests/produto.test.js` | 13 | Página de detalhe, galeria, avaliações e quem pode avaliar |
-| `tests/checkout.test.js` | 12 | Resolução do carrinho, preço do banco, estoque, frete |
+| `tests/auth-sessao.test.js` | 12 | Cookies, rotação, reuso, janela de corrida, logout, CSRF, revogação por senha |
 | `tests/conta.test.js` | 12 | Central da conta: nome, troca de senha, avaliações próprias; cadastro de newsletter |
+| `tests/verificacao-email.test.js` | 11 | Provedores aceitos, força da senha, link de confirmação, reenvio, SMTP fora do ar |
 | `tests/estoque.test.js` | 8 | Baixa, idempotência, devolução por estorno |
 | `tests/recuperacao.test.js` | 4 | Token gravado como hash, invalidação dos links pendentes |
 
-São 80 subtestes mais os 7 de nível superior — daí os 87 que o runner conta
-(conferido rodando a suíte em 23/09/2026).
+São 120 subtestes mais os 9 de nível superior — daí os 129 que o runner conta
+(conferido rodando a suíte em 24/09/2026).
+
+- **O SMTP é simulado em `verificacao-email.test.js`.** O `nodemailer.createTransport`
+  que o servidor usa é trocado por uma caixa de saída em memória, e o teste lê
+  o link do e-mail "enviado". Nenhum e-mail sai, mesmo com SMTP real no `.env`.
+- **Contas de fixture nascem confirmadas.** `criarUsuario()` grava
+  `email_verificado = TRUE`, porque o banco cria contas novas não confirmadas;
+  quem testa a confirmação passa `emailVerificado: false`. E todo e-mail de
+  teste leva o prefixo do `limpar()` — um teste que cadastre fora dele deixa
+  lixo no banco se a validação quebrar.
+
+- **O endpoint da Google é simulado.** `login-google.test.js` intercepta o
+  `fetch` global só para a URL do `tokeninfo`; o resto passa direto. Nada no
+  servidor muda para acomodar o teste.
 
 - **Autenticação por cookie, como o navegador.** `cabecalhosDeSessao(token)`, em
   `tests/ajuda.js`, monta o cookie `access_token` e o CSRF em dobro. O header
@@ -417,8 +540,12 @@ São 80 subtestes mais os 7 de nível superior — daí os 87 que o runner conta
 - **O rate limit vale dentro dos testes.** O `limitadorSenha` permite 5
   requisições por hora, somando `/auth/alterar-senha`, `/auth/recuperar-senha` e
   `/auth/redefinir-senha`. `conta.test.js` já gasta as 5; `recuperacao.test.js`
-  gasta 4; `auth-sessao.test.js`, 2. A sexta recebe 429 e o teste falha sem
-  motivo aparente. Como cada
+  gasta 4; `verificacao-email.test.js`, 4 (o reenvio da confirmação também
+  conta aqui); `login-google.test.js`, 3; `auth-sessao.test.js`, 2. A sexta
+  recebe 429 e o teste falha sem motivo aparente. Falhas de login contam no
+  `limitadorLogin` (10): `login-google.test.js` gera 6. O `limitadorCadastro`
+  (20, somando cadastro, newsletter e confirmação de e-mail) é o mais
+  apertado: `verificacao-email.test.js` usa 19. Como cada
   arquivo roda em processo próprio, o contador zera entre arquivos — por isso a
   recuperação de senha tem arquivo separado.
 - **O `.env` local tem SMTP de verdade.** `recuperacao.test.js` apaga as
@@ -433,9 +560,14 @@ falha que originou boa parte deste projeto.
 
 ## Front-end
 
-São sete páginas: `E-Commerce.html` (vitrine, servida como índice), `cart.html`,
-`produto.html`, `auth.html`, `redefinir-senha.html`, `perfil.html` e
-`admin.html`.
+São oito páginas: `E-Commerce.html` (vitrine, servida como índice), `cart.html`,
+`produto.html`, `auth.html`, `redefinir-senha.html`, `verificar-email.html`,
+`perfil.html` e `admin.html`.
+
+- **`auth.html` avisa na própria página** (`#avisoAuth`) o que é novo: conta
+  criada à espera de confirmação e login de conta não confirmada, com o botão
+  de reenviar o link. O e-mail e a senha para o reenvio ficam só na memória da
+  página, nunca em storage.
 
 - `public/sessao.js` — **carrega primeiro em toda página** (antes de `script.js`
   e de `admin.js`). Base da API, cache do usuário e `chamarApi()`, a única
@@ -457,6 +589,15 @@ São sete páginas: `E-Commerce.html` (vitrine, servida como índice), `cart.htm
 - `renderDesconto()` em `script.js` é o único lugar que monta preço riscado e
   selo. Página nova que mostre preço (um catálogo, por exemplo) usa ela, não
   refaz a conta.
+- **Cupom no carrinho:** só o código fica guardado, em `sessionStorage`. Cada
+  redesenho do carrinho revalida no servidor, e com cupom os três valores
+  (subtotal, frete, total) exibidos são os que o servidor devolveu. Um contador
+  de rodadas descarta respostas atrasadas quando a pessoa clica rápido em +/−.
+- **Botão do Google em `auth.html`:** o script da Google só é carregado se
+  `GET /config` trouxer `googleClientId`. Sem ele, o bloco fica escondido — melhor
+  não mostrar do que mostrar um botão que não funciona.
+- **Painel:** a aba Cupons segue o padrão de abas existente. A spec citava um
+  "menu lateral" de um `mockup-relatorios-admin.html` que não existe.
 - `.so-leitor` em `estilos.css` é o texto só para leitor de tela. Use onde
   `aria-label` não vale (`<del>`, `<span>` genérico).
 - `public/estilos.css` — sistema de design compartilhado por todas as páginas.
@@ -480,10 +621,11 @@ segundos e forks sobrevivem à exclusão.
 Se aparecer comportamento estranho em contas, e-mails ou pagamentos, este
 vazamento é o primeiro suspeito.
 
-Proteções em vigor: `helmet` com CSP, rate limit em login, recuperação de senha,
-cadastro, painel e webhook; `JWT_SECRET` obrigatório com mínimo de 32
-caracteres; `UNIQUE` em `usuarios.email`; token de recuperação gravado como
-hash; aviso no log de subida quando `CORS_ORIGINS` está vazia (nesse caso
+Proteções em vigor: `helmet` com CSP, rate limit em login (inclusive com
+Google), recuperação de senha, cadastro, painel, webhook e tentativa de cupom; `JWT_SECRET` obrigatório com mínimo de 32
+caracteres; `UNIQUE` em `usuarios.email`; tokens de recuperação e de
+confirmação de e-mail gravados como hash; cadastro só com provedor de e-mail
+conhecido, senha forte e e-mail confirmado; aviso no log de subida quando `CORS_ORIGINS` está vazia (nesse caso
 qualquer origem é aceita).
 
 ---
@@ -518,12 +660,24 @@ qualquer origem é aceita).
 6. **Andaimes de depuração que sobraram.** Dois, ambos do início do projeto:
    - `trigger-request.js` na raiz — dispara um POST em `/auth/recuperar-senha`
      com e-mail fixo. Não é chamado por nada nem aparece em `npm run`.
-   - `POST /debug/teste` em `server.js:1176` — ecoa o corpo recebido. Fica atrás
+   - `POST /debug/teste` em `server.js` — ecoa o corpo recebido. Fica atrás
      de `NODE_ENV !== 'production'`, então **não** existe no Render, mas responde
      em qualquer execução local.
 
    Nenhum dos dois é falha de segurança hoje. São candidatos a remoção, ou a
    virar teste de verdade.
+7. **Apelidos do mesmo e-mail contam como pessoas diferentes.** No Gmail,
+   `joao+1@gmail.com` e `j.o.a.o@gmail.com` chegam na mesma caixa, e cada um
+   abre uma conta — o que permite repetir cupom de "uma vez por cliente". A lista
+   de provedores barra o e-mail temporário, não isto. A saída seria normalizar
+   o endereço do Gmail (tirar pontos e o `+sufixo`) antes de conferir duplicidade.
+8. **Cupom disputado por pedidos simultâneos** pode passar do limite de uso: o
+   limite é conferido na criação do pedido e o uso só conta na aprovação. Fica
+   registrado em log (`[CUPOM]`), como o estoque insuficiente.
+9. **Contas anteriores à confirmação de e-mail** entraram como confirmadas, sem
+   nunca terem provado o endereço (escolha para não trancar o admin num deploy
+   sem SMTP). Se isso incomodar, basta marcá-las `FALSE` à mão, uma vez, com
+   SMTP já configurado.
 
 **Resolvidas desde a última revisão**, mantidas aqui para não serem reabertas:
 
@@ -534,6 +688,9 @@ qualquer origem é aceita).
 - `package.json` teve o campo `main` corrigido (apontava para arquivo
   inexistente) e `qs` e `nodemailer` foram atualizados para versões sem
   vulnerabilidade conhecida.
+- O pré-sequestro de conta pelo vínculo com Google foi fechado pela
+  confirmação de e-mail no cadastro, e pela senha desativada quando o Google
+  vincula uma conta que nunca confirmou o e-mail.
 
 > O catálogo é editado pelo painel e muda com frequência. Confira o estado real
 > no banco antes de afirmar quantidades — não confie em números escritos aqui.

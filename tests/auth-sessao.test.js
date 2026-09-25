@@ -16,7 +16,7 @@ const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 
 const { app, pool, criarTokenRecuperacao } = require('../server.js');
-const { criarUsuario, limpar, PREFIXO } = require('./ajuda.js');
+const { criarUsuario, limpar } = require('./ajuda.js');
 
 const SENHA = 'SenhaDeTeste123';
 
@@ -190,21 +190,9 @@ test('sessão por cookies', async (t) => {
         assert.equal(gravado.rows[0].token_hash, sha256(navegador.valor('refresh_token')), 'o banco guarda só o hash');
     });
 
-    await t.test('cadastro também abre a sessão', async () => {
-        const navegador = new Navegador();
-        const email = `${PREFIXO}cadastro_${Date.now()}@local.test`;
-
-        const { status, dados } = await navegador.pedir('POST', '/auth/cadastro', {
-            corpo: { nome: 'Conta Nova', email, senha: SENHA }
-        });
-
-        assert.equal(status, 201);
-        assert.equal(dados.usuario.email, email);
-        assert.equal('token' in dados, false);
-
-        const eu = await navegador.pedir('GET', '/auth/me');
-        assert.equal(eu.status, 200, 'quem acabou de se cadastrar já está logado');
-    });
+    // O cadastro não abre sessão: a conta só entra depois de confirmar o
+    // e-mail. Isso é coberto em verificacao-email.test.js, que simula o SMTP —
+    // aqui um cadastro válido mandaria e-mail de verdade pelo .env local.
 
     await t.test('rota protegida aceita o cookie e recusa sem ele', async () => {
         const navegador = await entrar(await criarUsuarioComSenha());

@@ -36,6 +36,7 @@
             <div class="abas" role="tablist">
                 <button class="aba active" type="button" data-aba="produtos" role="tab">Produtos</button>
                 <button class="aba" type="button" data-aba="pedidos" role="tab">Pedidos</button>
+                <button class="aba" type="button" data-aba="cupons" role="tab">Cupons</button>
             </div>
 
             <!-- ---------- Produtos ---------- -->
@@ -100,6 +101,36 @@
                         <button class="btn btn-secondary btn-sm" type="button" id="paginaAnterior">Anterior</button>
                         <button class="btn btn-secondary btn-sm" type="button" id="paginaProxima">Próxima</button>
                     </span>
+                </div>
+            </section>
+
+            <!-- ---------- Cupons ---------- -->
+            <section id="abaCupons" class="card hidden">
+                <div class="secao-titulo">
+                    <h2>Cupons de desconto</h2>
+                    <button class="btn btn-primary btn-sm" type="button" id="novoCupomBtn">Novo cupom</button>
+                </div>
+                <p class="muted" style="font-size:.82rem;margin:-.4rem 0 .9rem">
+                    O uso só conta quando o pagamento é aprovado. Cupom não se apaga: desative para tirar de circulação.
+                </p>
+                <div class="table-wrap">
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>Código</th>
+                                <th class="num">Desconto</th>
+                                <th class="num">Pedido mínimo</th>
+                                <th>Validade</th>
+                                <th class="num">Usos</th>
+                                <th class="num">Por cliente</th>
+                                <th>Situação</th>
+                                <th></th>
+                            </tr>
+                        </thead>
+                        <tbody id="listaCupons">
+                            <tr><td colspan="8" class="muted">Carregando...</td></tr>
+                        </tbody>
+                    </table>
                 </div>
             </section>
         </div>
@@ -189,6 +220,75 @@
             <div class="dialog-foot">
                 <button class="btn btn-secondary" type="button" data-fechar>Cancelar</button>
                 <button class="btn btn-primary" type="submit" id="salvarProdutoBtn">Salvar</button>
+            </div>
+        </form>
+    </dialog>
+
+    <!-- ---------- Modal de cupom ---------- -->
+    <dialog id="dialogCupom">
+        <form method="dialog" id="formCupomAdmin">
+            <div class="dialog-head" id="dialogCupomTitulo">Novo cupom</div>
+            <div class="dialog-body">
+                <div id="erroCupom" class="aviso aviso-erro hidden"></div>
+                <div class="form-grid">
+                    <div class="full">
+                        <label for="campoCodigoCupom">Código</label>
+                        <input id="campoCodigoCupom" maxlength="50" required autocomplete="off"
+                               style="text-transform:uppercase" aria-describedby="dicaCodigoCupom">
+                        <p id="dicaCodigoCupom" class="muted" style="font-size:.78rem;margin:.35rem 0 0">
+                            De 3 a 50 caracteres: letras, números, "-" e "_". Gravado em maiúsculas.
+                        </p>
+                    </div>
+                    <div>
+                        <label for="campoTipoCupom">Tipo</label>
+                        <select id="campoTipoCupom">
+                            <option value="percentual">Percentual (%)</option>
+                            <option value="fixo">Valor fixo (R$)</option>
+                        </select>
+                    </div>
+                    <div>
+                        <label for="campoValorCupom">Desconto</label>
+                        <input id="campoValorCupom" type="number" step="0.01" min="0.01" required
+                               aria-describedby="dicaValorCupom">
+                        <p id="dicaValorCupom" class="muted" style="font-size:.78rem;margin:.35rem 0 0">
+                            Sobre o subtotal dos produtos, nunca sobre o frete.
+                        </p>
+                    </div>
+                    <div>
+                        <label for="campoMinimoCupom">Pedido mínimo (R$)</label>
+                        <input id="campoMinimoCupom" type="number" step="0.01" min="0" placeholder="0 = qualquer valor">
+                    </div>
+                    <div>
+                        <label for="campoAtivoCupom">Situação</label>
+                        <select id="campoAtivoCupom">
+                            <option value="true">Ativo</option>
+                            <option value="false">Desativado</option>
+                        </select>
+                    </div>
+                    <div>
+                        <label for="campoUsoMaximo">Limite total de usos</label>
+                        <input id="campoUsoMaximo" type="number" step="1" min="1" placeholder="vazio = ilimitado">
+                    </div>
+                    <div>
+                        <label for="campoUsoPorCliente">Usos por cliente</label>
+                        <input id="campoUsoPorCliente" type="number" step="1" min="1" value="1" required>
+                    </div>
+                    <div>
+                        <label for="campoValidoDe">Vale a partir de</label>
+                        <input id="campoValidoDe" type="datetime-local">
+                    </div>
+                    <div>
+                        <label for="campoValidoAte">Vale até</label>
+                        <input id="campoValidoAte" type="datetime-local" aria-describedby="dicaValidade">
+                    </div>
+                    <p id="dicaValidade" class="muted full" style="font-size:.78rem;margin:0">
+                        Datas no horário deste computador. Deixe vazio para não ter limite de data.
+                    </p>
+                </div>
+            </div>
+            <div class="dialog-foot">
+                <button class="btn btn-secondary" type="button" data-fechar>Cancelar</button>
+                <button class="btn btn-primary" type="submit" id="salvarCupomBtn">Salvar</button>
             </div>
         </form>
     </dialog>

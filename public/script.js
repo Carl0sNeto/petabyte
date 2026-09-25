@@ -153,20 +153,279 @@ function updateQuantity(produtoId, delta) {
     return cart;
 }
 
-// Espelha calcularFrete() do servidor. Serve só para exibição: o valor que
-// vale é o recalculado no backend ao criar a preferência de pagamento.
-function getShipping(total) {
-    return total > 199 ? 0 : 19.9;
+// Espelha calcularFrete() do servidor: frete fixo, sem faixa de frete grátis.
+// Serve só para exibição; o valor que vale é o recalculado no backend.
+function getShipping() {
+    return 19.9;
 }
 
 function createCartSummary(itensDetalhados) {
     const subtotal = itensDetalhados.reduce((sum, item) => sum + item.produto.preco * item.quantidade, 0);
-    const shipping = getShipping(subtotal);
+    const shipping = getShipping();
     return {
         subtotal,
         shipping,
         total: subtotal + shipping
     };
+}
+
+// --------------------------------------------------------------------------
+// Avisos da tela de login
+// --------------------------------------------------------------------------
+
+// Guarda o e-mail e a senha do último login recusado por falta de
+// confirmação: o reenvio do link exige os dois, para só quem criou a conta
+// poder pedir. Fica só na memória da página, nunca em storage.
+let credencialParaReenvio = null;
+
+function avisarAuth(texto, tipo = 'ok', reenvio = null) {
+    const caixa = document.getElementById('avisoAuth');
+    if (!caixa) return;
+
+    credencialParaReenvio = reenvio;
+    document.getElementById('avisoAuthTexto').textContent = texto;
+    document.getElementById('reenviarVerificacaoBtn').classList.toggle('hidden', !reenvio);
+    caixa.className = `aviso-conta ${tipo === 'erro' ? 'aviso-conta-erro' : 'aviso-conta-ok'}`;
+}
+
+async function reenviarVerificacao() {
+    if (!credencialParaReenvio) return;
+
+    const botao = document.getElementById('reenviarVerificacaoBtn');
+    botao.disabled = true;
+
+    try {
+        const resposta = await requisitar('/auth/reenviar-verificacao', {
+            method: 'POST',
+            body: JSON.stringify(credencialParaReenvio)
+        });
+        const dados = await lerResposta(resposta);
+        avisarAuth(dados.mensagem || 'Não foi possível reenviar agora.', resposta.ok ? 'ok' : 'erro');
+    } catch (error) {
+        console.error(error);
+        avisarAuth('Não foi possível conectar ao servidor.', 'erro');
+    } finally {
+        botao.disabled = false;
+    }
+}
+
+// --------------------------------------------------------------------------
+// Login com Google
+// --------------------------------------------------------------------------
+//
+// O botão é o da própria Google (Google Identity Services), que devolve uma
+// credencial assinada direto no navegador. Ela vai para POST /auth/google, que
+// a confere na Google antes de abrir a sessão — a mesma sessão em cookies do
+// login com senha.
+
+const URL_SCRIPT_GOOGLE = 'https://accounts.google.com/gsi/client';
+
+function avisarLoginGoogle(texto) {
+    const caixa = document.getElementById('avisoGoogle');
+    if (!caixa) return;
+    caixa.textContent = texto;
+    caixa.classList.remove('hidden');
+}
+
+function carregarScriptGoogle() {
+    return new Promise((resolve, reject) => {
+        if (window.google && window.google.accounts && window.google.accounts.id) {
+            resolve();
+            return;
+        }
+
+        const script = document.createElement('script');
+        script.src = URL_SCRIPT_GOOGLE;
+        script.async = true;
+        script.onload = () => resolve();
+        script.onerror = () => reject(new Error('Não foi possível carregar o login do Google.'));
+        document.head.appendChild(script);
+    });
+}
+
+async function entrarComGoogle(respostaGoogle) {
+    try {
+        // requisitar, não chamarApi: um 401 aqui é credencial recusada, não
+        // sessão vencida para renovar.
+        const resposta = await requisitar('/auth/google', {
+            method: 'POST',
+            body: JSON.stringify({ credential: respostaGoogle.credential })
+        });
+        const dados = await lerResposta(resposta);
+
+        if (!resposta.ok) {
+            avisarLoginGoogle(dados.mensagem || 'Não foi possível entrar com o Google.');
+            return;
+        }
+
+        salvarUsuarioLocal(dados.usuario);
+        window.location.href = 'E-Commerce.html';
+    } catch (error) {
+        console.error(error);
+        avisarLoginGoogle('Não foi possível conectar ao servidor.');
+    }
+}
+
+// Sem Client ID configurado no servidor, o bloco continua escondido: melhor
+// não mostrar o botão do que mostrar um botão que não funciona.
+async function iniciarLoginGoogle() {
+    const bloco = document.getElementById('blocoGoogle');
+    const alvo = document.getElementById('botaoGoogle');
+    const config = await carregarConfig();
+
+    if (!config.googleClientId) return;
+
+    try {
+        await carregarScriptGoogle();
+
+        window.google.accounts.id.initialize({
+            client_id: config.googleClientId,
+            callback: entrarComGoogle
+        });
+
+        bloco.classList.remove('hidden');
+
+        window.google.accounts.id.renderButton(alvo, {
+            theme: 'outline',
+            size: 'large',
+            text: 'continue_with',
+            shape: 'pill',
+            locale: 'pt-BR',
+            width: Math.min(alvo.offsetWidth || 320, 400)
+        });
+    } catch (error) {
+        // Bloqueio de CSP, extensão ou rede: o formulário de senha segue funcionando.
+        console.warn('Login com Google indisponível:', error);
+        bloco.classList.add('hidden');
+    }
+}
+
+// --------------------------------------------------------------------------
+// Cupom no carrinho
+// --------------------------------------------------------------------------
+//
+// Só o código fica guardado, na sessão da aba. O desconto exibido é sempre o
+// que o servidor devolveu na última validação, e o checkout recalcula tudo de
+// novo: o carrinho nunca manda valor de desconto, só o código.
+
+const CUPOM_KEY = 'petabyte-cupom';
+
+// Cada redesenho do carrinho revalida o cupom. Com cliques rápidos em +/−, uma
+// resposta antiga pode chegar depois da nova; só a rodada mais recente escreve.
+let rodadaCupom = 0;
+
+function lerCupomSalvo() {
+    try { return sessionStorage.getItem(CUPOM_KEY) || ''; } catch (error) { return ''; }
+}
+
+function guardarCupom(codigo) {
+    try { sessionStorage.setItem(CUPOM_KEY, codigo); } catch (error) { /* sem storage, vale só nesta tela */ }
+}
+
+function esquecerCupom() {
+    try { sessionStorage.removeItem(CUPOM_KEY); } catch (error) { /* nada a limpar */ }
+}
+
+// Aviso na própria página, nunca alert(): é a pendência que este projeto não
+// quer aumentar.
+function avisarCupom(texto, tipo = 'ok') {
+    const caixa = document.getElementById('avisoCupom');
+    if (!caixa) return;
+
+    if (!texto) {
+        caixa.classList.add('hidden');
+        return;
+    }
+
+    caixa.textContent = texto;
+    caixa.className = `aviso-conta ${tipo === 'erro' ? 'aviso-conta-erro' : 'aviso-conta-ok'}`;
+}
+
+// Valida o cupom guardado contra o carrinho de agora. Devolve a conta feita
+// pelo servidor, ou null se não há cupom aplicável.
+async function validarCupomDoCarrinho(itens) {
+    const codigo = lerCupomSalvo();
+    if (!codigo) return null;
+
+    if (!hasValidSession()) {
+        esquecerCupom();
+        avisarCupom('Entre na sua conta para usar um cupom.', 'erro');
+        return null;
+    }
+
+    try {
+        const resultado = await chamarApi('/cupons/validar', {
+            method: 'POST',
+            redirecionarSeDeslogado: false,
+            body: JSON.stringify({
+                codigo,
+                itens: itens.map((item) => ({ id: item.id, quantidade: item.quantidade }))
+            })
+        });
+
+        if (!resultado.valido) {
+            // O código continua no campo: se a recusa foi o pedido mínimo, a
+            // pessoa aumenta o carrinho e aplica de novo com um clique.
+            esquecerCupom();
+            avisarCupom(resultado.motivo, 'erro');
+            return null;
+        }
+
+        return resultado;
+    } catch (error) {
+        esquecerCupom();
+        avisarCupom(error.message || 'Não foi possível validar o cupom.', 'erro');
+        return null;
+    }
+}
+
+function ligarFormularioCupom() {
+    const formulario = document.getElementById('formCupom');
+    if (!formulario) return;
+
+    const campo = document.getElementById('campoCupom');
+    const botao = document.getElementById('aplicarCupomBtn');
+
+    // Um código aplicado antes (nesta aba) volta para o campo.
+    campo.value = lerCupomSalvo();
+
+    formulario.addEventListener('submit', async (evento) => {
+        evento.preventDefault();
+        const codigo = campo.value.trim().toUpperCase();
+
+        if (!codigo) {
+            avisarCupom('Digite o código do cupom.', 'erro');
+            return;
+        }
+
+        if (!hasValidSession()) {
+            avisarCupom('Entre na sua conta para usar um cupom.', 'erro');
+            return;
+        }
+
+        campo.value = codigo;
+        guardarCupom(codigo);
+        avisarCupom('');
+        botao.disabled = true;
+
+        try {
+            await renderCartPage();
+        } finally {
+            botao.disabled = false;
+        }
+
+        // Recusado, validarCupomDoCarrinho já esqueceu o código e deu o motivo.
+        if (lerCupomSalvo()) {
+            avisarCupom(`Cupom ${codigo} aplicado.`);
+        }
+    });
+
+    document.getElementById('removerCupomBtn').addEventListener('click', () => {
+        esquecerCupom();
+        campo.value = '';
+        avisarCupom('');
+        renderCartPage();
+    });
 }
 
 // Junta o carrinho (ids) com o catálogo vindo da API, descartando produtos
@@ -214,9 +473,11 @@ async function iniciarPagamento() {
     try {
         const data = await chamarApi('/pagamentos/criar', {
             method: 'POST',
-            // Só id e quantidade. O servidor resolve nome e preço no banco.
+            // Só id e quantidade, e o código do cupom. O servidor resolve nome,
+            // preço e desconto no banco.
             body: JSON.stringify({
-                itens: cart.map((item) => ({ id: item.id, quantidade: item.quantidade }))
+                itens: cart.map((item) => ({ id: item.id, quantidade: item.quantidade })),
+                cupom: lerCupomSalvo() || undefined
             })
         });
 
@@ -257,6 +518,7 @@ async function tratarRetornoPagamento() {
 
             if (data.status === 'approved') {
                 localStorage.removeItem(STORAGE_KEY);
+                esquecerCupom();
                 updateCartBadge();
                 renderCartPage();
                 alert('Pagamento aprovado! Pedido confirmado com sucesso.');
@@ -319,10 +581,24 @@ async function renderCartPage() {
 
     if (!cartItems || !cartTotal || !shippingValue || !finalTotal) return;
 
+    const linhaDesconto = document.getElementById('linhaDesconto');
+    const removerCupomBtn = document.getElementById('removerCupomBtn');
+
+    const mostrarDesconto = (cupom) => {
+        if (!linhaDesconto) return;
+        linhaDesconto.classList.toggle('hidden', !cupom);
+        if (removerCupomBtn) removerCupomBtn.classList.toggle('hidden', !cupom);
+        if (!cupom) return;
+
+        document.getElementById('codigoCupomAplicado').textContent = `(${cupom.codigo})`;
+        document.getElementById('valorDesconto').textContent = `− ${formatCurrency(cupom.desconto)}`;
+    };
+
     const zerarResumo = () => {
         cartTotal.textContent = formatCurrency(0);
         shippingValue.textContent = formatCurrency(0);
         finalTotal.textContent = formatCurrency(0);
+        mostrarDesconto(null);
     };
 
     let itens;
@@ -362,24 +638,18 @@ async function renderCartPage() {
         </div>
     `).join('');
 
-    cartTotal.textContent = formatCurrency(resumo.subtotal);
-    shippingValue.textContent = formatCurrency(resumo.shipping);
-    finalTotal.textContent = formatCurrency(resumo.total);
+    const minhaRodada = ++rodadaCupom;
+    const cupom = await validarCupomDoCarrinho(itens);
 
-    // Faltando pouco para o frete grátis, vale avisar.
-    const avisoFrete = document.getElementById('avisoFrete');
-    if (avisoFrete) {
-        const faltam = 199 - resumo.subtotal;
-        if (resumo.shipping === 0) {
-            avisoFrete.textContent = '🚚 Você ganhou frete grátis neste pedido!';
-            avisoFrete.classList.remove('hidden');
-        } else if (faltam > 0) {
-            avisoFrete.textContent = `Faltam ${formatCurrency(faltam)} para o frete grátis.`;
-            avisoFrete.classList.remove('hidden');
-        } else {
-            avisoFrete.classList.add('hidden');
-        }
-    }
+    // Um clique mais novo já redesenhou o carrinho; esta resposta está velha.
+    if (minhaRodada !== rodadaCupom) return;
+
+    // Com cupom, os três valores vêm do servidor, que é quem vai cobrar. Sem
+    // cupom, a conta local espelha a do servidor só para exibição.
+    cartTotal.textContent = formatCurrency(cupom ? cupom.subtotal : resumo.subtotal);
+    shippingValue.textContent = formatCurrency(cupom ? cupom.frete : resumo.shipping);
+    finalTotal.textContent = formatCurrency(cupom ? cupom.total : resumo.total);
+    mostrarDesconto(cupom);
 }
 
 // Estrelas do cartão da vitrine. SVG em vez do caractere ★, que muda de
@@ -783,6 +1053,14 @@ document.addEventListener('DOMContentLoaded', () => {
                 });
 
                 const data = await lerResposta(response);
+
+                // Senha certa, e-mail ainda não confirmado: aviso na página,
+                // com o botão de reenviar o link.
+                if (response.status === 403 && data.codigo === 'email_nao_verificado') {
+                    avisarAuth(data.mensagem, 'erro', { email, senha });
+                    return;
+                }
+
                 if (!response.ok) throw new Error(data.mensagem || 'Erro ao entrar.');
 
                 salvarUsuarioLocal(data.usuario);
@@ -818,10 +1096,13 @@ document.addEventListener('DOMContentLoaded', () => {
                 const data = await lerResposta(response);
                 if (!response.ok) throw new Error(data.mensagem || 'Erro ao criar conta.');
 
-                // O cadastro já abre a sessão: segue para a loja como no login.
-                salvarUsuarioLocal(data.usuario);
-                alert(data.mensagem || 'Conta criada com sucesso!');
-                window.location.href = 'E-Commerce.html';
+                // A conta nasce sem sessão: só entra depois de confirmar o
+                // e-mail. O aviso fica na página, com o endereço usado, e a
+                // tela volta para "Entrar", que é o próximo passo.
+                registerForm.reset();
+                document.querySelector('.aba[data-target="login"]').click();
+                document.getElementById('loginEmail').value = data.email || email;
+                avisarAuth(data.mensagem, 'ok');
             } catch (error) {
                 console.error(error);
                 alert(error.message || 'Não foi possível criar a conta.');
@@ -836,6 +1117,16 @@ document.addEventListener('DOMContentLoaded', () => {
     if (document.body.dataset.page === 'cart') {
         renderCartPage();
         tratarRetornoPagamento();
+        ligarFormularioCupom();
+    }
+
+    if (document.getElementById('botaoGoogle')) {
+        iniciarLoginGoogle();
+    }
+
+    const botaoReenvio = document.getElementById('reenviarVerificacaoBtn');
+    if (botaoReenvio) {
+        botaoReenvio.addEventListener('click', reenviarVerificacao);
     }
 
     document.addEventListener('click', (event) => {
