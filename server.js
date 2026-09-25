@@ -1255,6 +1255,38 @@ function validarDadosProduto(corpo, { parcial = false } = {}) {
         dados.ativo = true;
     }
 
+    if (definido('destaque')) {
+        dados.destaque = corpo.destaque === true || corpo.destaque === 'true';
+    } else if (!parcial) {
+        dados.destaque = false;
+    }
+
+    // null é valor de verdade aqui (tira a posição), por isso não passa pelo
+    // definido(), que o trataria como "campo não enviado".
+    if (corpo.ordemDestaque !== undefined) {
+        const bruto = corpo.ordemDestaque;
+
+        if (bruto === null || bruto === '') {
+            dados.ordemDestaque = null;
+        } else {
+            const ordem = Number(bruto);
+            if (!Number.isInteger(ordem) || ordem < 0 || ordem > 9999) {
+                erros.push('A ordem no destaque precisa ser um número inteiro de 0 a 9999, ou ficar vazia.');
+            } else {
+                dados.ordemDestaque = ordem;
+            }
+        }
+    } else if (!parcial) {
+        dados.ordemDestaque = null;
+    }
+
+    // Produto que sai do destaque perde a posição: ordem_destaque só tem
+    // sentido com destaque = TRUE, e uma posição esquecida voltaria a valer
+    // sozinha no dia em que alguém marcasse o produto de novo.
+    if (dados.destaque === false) {
+        dados.ordemDestaque = null;
+    }
+
     // Anunciar desconto sobre um preço menor que o atual seria propaganda
     // enganosa. Só dá para conferir quando os dois valores estão à mão.
     const precoFinal = dados.preco !== undefined ? dados.preco : null;
@@ -2655,47 +2687,219 @@ app.post('/auth/redefinir-senha', limitadorSenha, async (req, res) => {
     }
 });
 
-app.get('/produtos', async (req, res) => {
+// ---------------------------------------------------------------------------
+// Vitrine: destaques da home e catálogo com busca
+// ---------------------------------------------------------------------------
+
+// A média entra na consulta da vitrine para as estrelas aparecerem já no
+// cartão. LEFT JOIN porque produto sem avaliação ainda é listado.
+const SELECT_CARTAO_PRODUTO = `
+    SELECT p.id, p.nome, p.descricao, p.preco, p.preco_original, p.categoria,
+           p.imagem_url, p.estoque, p.tags, p.criado_em,
+           COALESCE(ROUND(AVG(a.nota)::numeric, 2), 0) AS nota_media,
+           COUNT(a.id)::int AS total_avaliacoes
+    FROM produtos p
+    LEFT JOIN avaliacoes a ON a.produto_id = p.id`;
+
+function serializarCartao(linha) {
+    return {
+        id: linha.id,
+        nome: linha.nome,
+        descricao: linha.descricao,
+        preco: Number(linha.preco),
+        precoOriginal: linha.preco_original === null ? null : Number(linha.preco_original),
+        categoria: linha.categoria,
+        imagemUrl: linha.imagem_url,
+        tags: linha.tags || [],
+        notaMedia: Number(linha.nota_media),
+        totalAvaliacoes: linha.total_avaliacoes,
+        disponivel: linha.estoque > 0,
+        // Sinal grosso, sem revelar o saldo exato do estoque.
+        estoqueBaixo: linha.estoque > 0 && linha.estoque <= 5
+    };
+}
+
+// Só as categorias que têm produto à venda, do catálogo ativo INTEIRO — nunca
+// do resultado já filtrado. Um filtro que some quando outro é aplicado deixa
+// a pessoa sem caminho de volta; um que não devolve nada é ruído.
+async function categoriasComProduto() {
+    const resultado = await pool.query('SELECT DISTINCT categoria FROM produtos WHERE ativo = TRUE');
+    const emUso = new Set(resultado.rows.map((linha) => linha.categoria));
+    return CATEGORIAS.filter((categoria) => emUso.has(categoria.slug));
+}
+
+// Toda ordenação termina no id: com empate (mesmo preço, mesmo nome, mesmo
+// instante de criação), o Postgres não garante ordem estável entre duas
+// consultas, e a página 2 repetiria ou pularia item da página 1.
+const ORDENACOES_CATALOGO = {
+    recentes: 'p.criado_em DESC, p.id DESC',
+    az: 'p.nome ASC, p.id ASC',
+    za: 'p.nome DESC, p.id DESC',
+    'menor-preco': 'p.preco ASC, p.id ASC',
+    'maior-preco': 'p.preco DESC, p.id DESC'
+};
+
+const PRODUTOS_POR_PAGINA = 20;
+const LIMITE_PRODUTOS_POR_PAGINA = 60;
+const LIMITE_TAMANHO_BUSCA = 100;
+
+// % e _ são curingas do ILIKE. Sem escapar, buscar "100%" acharia qualquer
+// coisa que comece com "100", e "_" bateria com qualquer caractere.
+function escaparCuringasLike(texto) {
+    return texto.replace(/[\\%_]/g, (caractere) => `\\${caractere}`);
+}
+
+function lerPrecoDoFiltro(valor, nome) {
+    if (valor === undefined || valor === '') return { valor: null };
+
+    const numero = Number(String(valor).replace(',', '.'));
+    if (!Number.isFinite(numero) || numero < 0) {
+        return { erro: `O ${nome} precisa ser um número igual ou maior que zero.` };
+    }
+
+    return { valor: numero };
+}
+
+// Lê a query string do catálogo. Filtro malformado responde 400 em vez de ser
+// ignorado: ignorar mostraria o catálogo inteiro para quem pediu outra coisa.
+// Página e limite fora da faixa só são ajustados, como em /admin/pedidos.
+function lerFiltrosDoCatalogo(query) {
+    const filtros = {};
+
+    const busca = typeof query.busca === 'string' ? query.busca.trim() : '';
+    if (busca.length > LIMITE_TAMANHO_BUSCA) {
+        return { erro: `A busca pode ter no máximo ${LIMITE_TAMANHO_BUSCA} caracteres.` };
+    }
+    filtros.busca = busca;
+
+    const categoria = typeof query.categoria === 'string' ? query.categoria.trim().toLowerCase() : '';
+    if (categoria && categoria !== 'todos' && !CATEGORIAS_VALIDAS.includes(categoria)) {
+        return { erro: 'Categoria desconhecida.' };
+    }
+    filtros.categoria = categoria === 'todos' ? '' : categoria;
+
+    const minimo = lerPrecoDoFiltro(query.precoMin, 'preço mínimo');
+    if (minimo.erro) return { erro: minimo.erro };
+    const maximo = lerPrecoDoFiltro(query.precoMax, 'preço máximo');
+    if (maximo.erro) return { erro: maximo.erro };
+    filtros.precoMin = minimo.valor;
+    filtros.precoMax = maximo.valor;
+
+    const ordenar = typeof query.ordenar === 'string' && query.ordenar ? query.ordenar : 'recentes';
+    if (!ORDENACOES_CATALOGO[ordenar]) {
+        return { erro: `Ordenação desconhecida. Use: ${Object.keys(ORDENACOES_CATALOGO).join(', ')}.` };
+    }
+    filtros.ordenar = ordenar;
+
+    // ids: os produtos do carrinho, que precisa deles mesmo que estejam além
+    // da primeira página do catálogo.
+    filtros.ids = null;
+    if (typeof query.ids === 'string' && query.ids.trim()) {
+        const ids = query.ids.split(',').map((parte) => Number(parte.trim()));
+        if (ids.some((id) => !Number.isInteger(id) || id <= 0)) {
+            return { erro: 'Lista de produtos inválida.' };
+        }
+        if (ids.length > LIMITE_ITENS_CARRINHO) {
+            return { erro: `No máximo ${LIMITE_ITENS_CARRINHO} produtos por consulta.` };
+        }
+        filtros.ids = [...new Set(ids)];
+    }
+
+    const limitePedido = Number(query.limite);
+    filtros.limite = Number.isInteger(limitePedido) && limitePedido > 0
+        ? Math.min(limitePedido, LIMITE_PRODUTOS_POR_PAGINA)
+        : PRODUTOS_POR_PAGINA;
+
+    const paginaPedida = Number(query.pagina);
+    filtros.pagina = Number.isInteger(paginaPedida) && paginaPedida > 0 ? paginaPedida : 1;
+
+    return { filtros };
+}
+
+// Registrada antes de /produtos/:id, que de outro modo leria "destaques" como
+// um id e responderia 400.
+app.get('/produtos/destaques', async (req, res) => {
     if (!bancoDisponivel) {
         return res.status(503).json({ mensagem: 'Banco de dados indisponível no momento.' });
     }
 
     try {
-        // A média entra na consulta da vitrine para as estrelas aparecerem já
-        // no cartão. LEFT JOIN porque produto sem avaliação ainda é listado.
+        // Os dois filtros juntos, sempre: produto em destaque que saiu de
+        // circulação não pode aparecer na home de uma loja que não o vende.
         const resultado = await pool.query(
-            `SELECT p.id, p.nome, p.descricao, p.preco, p.preco_original, p.categoria,
-                    p.imagem_url, p.estoque, p.tags,
-                    COALESCE(ROUND(AVG(a.nota)::numeric, 2), 0) AS nota_media,
-                    COUNT(a.id)::int AS total_avaliacoes
-             FROM produtos p
-             LEFT JOIN avaliacoes a ON a.produto_id = p.id
-             WHERE p.ativo = TRUE
+            `${SELECT_CARTAO_PRODUTO}
+             WHERE p.destaque = TRUE AND p.ativo = TRUE
              GROUP BY p.id
-             ORDER BY p.id`
+             ORDER BY p.ordem_destaque ASC NULLS LAST, p.criado_em DESC, p.id DESC`
         );
 
-        const emUso = new Set(resultado.rows.map((linha) => linha.categoria));
+        return res.json({
+            produtos: resultado.rows.map(serializarCartao),
+            categorias: CATEGORIAS
+        });
+    } catch (erro) {
+        console.error('Erro ao listar destaques:', erro);
+        return res.status(500).json({ mensagem: 'Não foi possível carregar os destaques.' });
+    }
+});
+
+app.get('/produtos', async (req, res) => {
+    if (!bancoDisponivel) {
+        return res.status(503).json({ mensagem: 'Banco de dados indisponível no momento.' });
+    }
+
+    const leitura = lerFiltrosDoCatalogo(req.query);
+    if (leitura.erro) {
+        return res.status(400).json({ mensagem: leitura.erro });
+    }
+
+    const f = leitura.filtros;
+
+    // Todos os filtros combinam com AND; dentro da busca, nome, descrição e
+    // tags combinam com OR — basta bater em um dos três.
+    const condicoes = ['p.ativo = TRUE'];
+    const valores = [];
+    const parametro = (valor) => {
+        valores.push(valor);
+        return `$${valores.length}`;
+    };
+
+    if (f.busca) {
+        const termo = parametro(`%${escaparCuringasLike(f.busca)}%`);
+        condicoes.push(`(p.nome ILIKE ${termo}
+                         OR p.descricao ILIKE ${termo}
+                         OR EXISTS (SELECT 1 FROM unnest(p.tags) AS tag WHERE tag ILIKE ${termo}))`);
+    }
+
+    if (f.categoria) condicoes.push(`p.categoria = ${parametro(f.categoria)}`);
+    if (f.precoMin !== null) condicoes.push(`p.preco >= ${parametro(f.precoMin)}`);
+    if (f.precoMax !== null) condicoes.push(`p.preco <= ${parametro(f.precoMax)}`);
+    if (f.ids) condicoes.push(`p.id = ANY(${parametro(f.ids)}::int[])`);
+
+    const onde = `WHERE ${condicoes.join(' AND ')}`;
+
+    try {
+        const contagem = await pool.query(`SELECT COUNT(*)::int AS total FROM produtos p ${onde}`, valores);
+        const totalProdutos = contagem.rows[0].total;
+
+        const resultado = await pool.query(
+            `${SELECT_CARTAO_PRODUTO}
+             ${onde}
+             GROUP BY p.id
+             ORDER BY ${ORDENACOES_CATALOGO[f.ordenar]}
+             LIMIT ${parametro(f.limite)} OFFSET ${parametro((f.pagina - 1) * f.limite)}`,
+            valores
+        );
 
         return res.json({
-            produtos: resultado.rows.map((linha) => ({
-                id: linha.id,
-                nome: linha.nome,
-                descricao: linha.descricao,
-                preco: Number(linha.preco),
-                precoOriginal: linha.preco_original === null ? null : Number(linha.preco_original),
-                categoria: linha.categoria,
-                imagemUrl: linha.imagem_url,
-                tags: linha.tags || [],
-                notaMedia: Number(linha.nota_media),
-                totalAvaliacoes: linha.total_avaliacoes,
-                disponivel: linha.estoque > 0,
-                // Sinal grosso, sem revelar o saldo exato do estoque.
-                estoqueBaixo: linha.estoque > 0 && linha.estoque <= 5
-            })),
-            // Só as categorias que têm produto à venda: a loja monta os filtros
-            // a partir daqui, e um filtro que não devolve nada é ruído.
-            categorias: CATEGORIAS.filter((categoria) => emUso.has(categoria.slug))
+            produtos: resultado.rows.map(serializarCartao),
+            paginacao: {
+                paginaAtual: f.pagina,
+                totalPaginas: Math.max(1, Math.ceil(totalProdutos / f.limite)),
+                totalProdutos,
+                itensPorPagina: f.limite
+            },
+            categoriasDisponiveis: await categoriasComProduto()
         });
     } catch (erro) {
         console.error('Erro ao listar produtos:', erro);
@@ -3063,6 +3267,8 @@ function serializarProduto(linha) {
         imagemUrl: linha.imagem_url,
         estoque: linha.estoque,
         ativo: linha.ativo,
+        destaque: linha.destaque === true,
+        ordemDestaque: linha.ordem_destaque === undefined ? null : linha.ordem_destaque,
         tags: linha.tags || [],
         criadoEm: linha.criado_em,
         atualizadoEm: linha.atualizado_em
@@ -3075,7 +3281,8 @@ app.get('/admin/produtos', limitadorAdmin, autenticarToken, exigirAdmin, async (
     try {
         const resultado = await pool.query(
             `SELECT p.id, p.nome, p.descricao, p.preco, p.preco_original, p.categoria, p.imagem_url,
-                    p.estoque, p.ativo, p.tags, p.especificacoes, p.criado_em, p.atualizado_em,
+                    p.estoque, p.ativo, p.destaque, p.ordem_destaque,
+                    p.tags, p.especificacoes, p.criado_em, p.atualizado_em,
                     COALESCE(SUM(i.quantidade) FILTER (WHERE ped.status = 'Pago'), 0)::int AS vendidos,
                     COALESCE(
                         (SELECT array_agg(img.url ORDER BY img.posicao, img.id)
@@ -3121,11 +3328,12 @@ app.post('/admin/produtos', limitadorAdmin, autenticarToken, exigirAdmin, async 
 
         const resultado = await client.query(
             `INSERT INTO produtos (nome, descricao, preco, preco_original, categoria, imagem_url,
-                                   estoque, ativo, tags, especificacoes)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::jsonb)
+                                   estoque, ativo, tags, especificacoes, destaque, ordem_destaque)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::jsonb, $11, $12)
              RETURNING *`,
             [d.nome, d.descricao, d.preco, d.precoOriginal, d.categoria, d.imagemUrl,
-             d.estoque, d.ativo, d.tags, JSON.stringify(d.especificacoes || [])]
+             d.estoque, d.ativo, d.tags, JSON.stringify(d.especificacoes || []),
+             d.destaque, d.ordemDestaque]
         );
 
         const produto = resultado.rows[0];
@@ -3180,6 +3388,8 @@ app.put('/admin/produtos/:id', limitadorAdmin, autenticarToken, exigirAdmin, asy
         imagemUrl: 'imagem_url',
         estoque: 'estoque',
         ativo: 'ativo',
+        destaque: 'destaque',
+        ordemDestaque: 'ordem_destaque',
         tags: 'tags',
         especificacoes: 'especificacoes'
     };
@@ -3448,6 +3658,342 @@ app.get('/admin/pedidos/:id', limitadorAdmin, autenticarToken, exigirAdmin, asyn
     } catch (erro) {
         console.error('Erro ao buscar pedido no painel:', erro);
         return res.status(500).json({ mensagem: 'Não foi possível carregar o pedido.' });
+    }
+});
+
+// ---------------------------------------------------------------------------
+// Painel: relatórios
+//
+// Receita é o valor dos produtos, sem frete: subtotal menos o desconto do
+// cupom. Nunca pedidos.total, que carrega o frete — repassado à entrega, não
+// é venda. E só pedido Pago conta, o mesmo critério de comprouOProduto().
+// ---------------------------------------------------------------------------
+
+// Os dias do relatório são os do calendário da loja, não os do servidor.
+const FUSO_DA_LOJA = 'America/Sao_Paulo';
+
+// pedidos.criado_em é TIMESTAMP sem fuso, gravado com o relógio da sessão do
+// banco — UTC no Neon, -03:00 num Postgres local. Reinterpretado no fuso da
+// sessão e convertido para o da loja, um pedido das 22h de um dia não cai no
+// dia seguinte do relatório só porque o banco roda em UTC.
+const DATA_DO_PEDIDO_NA_LOJA = `((p.criado_em AT TIME ZONE current_setting('TimeZone')) AT TIME ZONE '${FUSO_DA_LOJA}')`;
+
+const PERIODO_PADRAO_DIAS = 30;
+const LIMITE_PERIODO_DIAS = 731;
+// Até 60 dias o gráfico é diário; acima disso, semanal. A decisão é do
+// servidor: o front só desenha os baldes que recebe.
+const LIMITE_GRAFICO_DIARIO_DIAS = 60;
+const DIAS_PARA_PARADO = 15;
+
+function hojeNaLoja() {
+    // en-CA formata como AAAA-MM-DD.
+    return new Intl.DateTimeFormat('en-CA', {
+        timeZone: FUSO_DA_LOJA, year: 'numeric', month: '2-digit', day: '2-digit'
+    }).format(new Date());
+}
+
+// Datas do relatório circulam como texto AAAA-MM-DD e são somadas em UTC, que
+// não tem horário de verão para pular ou repetir um dia.
+function somarDias(data, dias) {
+    const instante = new Date(`${data}T00:00:00Z`);
+    instante.setUTCDate(instante.getUTCDate() + dias);
+    return instante.toISOString().slice(0, 10);
+}
+
+function diasEntre(inicio, fim) {
+    return Math.round((Date.parse(`${fim}T00:00:00Z`) - Date.parse(`${inicio}T00:00:00Z`)) / 86400000);
+}
+
+// Recusa também datas que o Date "conserta" sozinho, como 2026-02-31.
+function dataDeCalendario(texto) {
+    if (typeof texto !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(texto)) return false;
+    const instante = new Date(`${texto}T00:00:00Z`);
+    return !Number.isNaN(instante.getTime()) && instante.toISOString().slice(0, 10) === texto;
+}
+
+// Os dois extremos entram no período: 01/09 a 30/09 são 30 dias.
+function lerPeriodoDoRelatorio(query) {
+    const temInicio = query.inicio !== undefined && query.inicio !== '';
+    const temFim = query.fim !== undefined && query.fim !== '';
+
+    let inicio;
+    let fim;
+
+    if (!temInicio && !temFim) {
+        fim = hojeNaLoja();
+        inicio = somarDias(fim, -(PERIODO_PADRAO_DIAS - 1));
+    } else if (temInicio !== temFim) {
+        return { erro: 'Informe as duas datas do período, início e fim.' };
+    } else {
+        inicio = query.inicio;
+        fim = query.fim;
+
+        if (!dataDeCalendario(inicio) || !dataDeCalendario(fim)) {
+            return { erro: 'Datas no formato AAAA-MM-DD.' };
+        }
+        if (inicio > fim) {
+            return { erro: 'A data de início precisa ser anterior ou igual à de fim.' };
+        }
+    }
+
+    const dias = diasEntre(inicio, fim) + 1;
+
+    if (dias > LIMITE_PERIODO_DIAS) {
+        return { erro: `O período pode ter no máximo ${LIMITE_PERIODO_DIAS} dias.` };
+    }
+
+    return {
+        periodo: {
+            inicio,
+            fim,
+            dias,
+            granularidade: dias > LIMITE_GRAFICO_DIARIO_DIAS ? 'week' : 'day'
+        },
+        // O intervalo imediatamente anterior, do mesmo tamanho, que alimenta
+        // as setas de variação dos cards.
+        anterior: {
+            inicio: somarDias(inicio, -dias),
+            fim: somarDias(inicio, -1)
+        }
+    };
+}
+
+const FILTRO_PEDIDO_PAGO_NO_PERIODO = `
+    p.status = 'Pago'
+    AND ${DATA_DO_PEDIDO_NA_LOJA} >= $1::date
+    AND ${DATA_DO_PEDIDO_NA_LOJA} < $2::date + 1`;
+
+const RECEITA_DO_PEDIDO = '(p.subtotal - COALESCE(p.desconto, 0))';
+
+async function totaisDeVendas(inicio, fim) {
+    const resultado = await pool.query(
+        `SELECT COALESCE(SUM(${RECEITA_DO_PEDIDO}), 0) AS receita, COUNT(*)::int AS pedidos
+         FROM pedidos p
+         WHERE ${FILTRO_PEDIDO_PAGO_NO_PERIODO}`,
+        [inicio, fim]
+    );
+
+    const receita = Number(resultado.rows[0].receita);
+    const pedidos = resultado.rows[0].pedidos;
+
+    return {
+        receita,
+        pedidos,
+        ticketMedio: pedidos > 0 ? Math.round((receita / pedidos) * 100) / 100 : 0
+    };
+}
+
+// Um balde por dia (ou semana) do período, inclusive os sem venda: um gráfico
+// que pula os dias vazios desenha uma linha contínua onde houve silêncio.
+async function serieDeVendas({ inicio, fim, granularidade }) {
+    const resultado = await pool.query(
+        `WITH baldes AS (
+             SELECT generate_series(
+                        date_trunc($3, $1::date::timestamp),
+                        $2::date::timestamp,
+                        ('1 ' || $3)::interval
+                    ) AS periodo
+         ),
+         vendas AS (
+             SELECT date_trunc($3, ${DATA_DO_PEDIDO_NA_LOJA}) AS periodo,
+                    SUM(${RECEITA_DO_PEDIDO}) AS receita,
+                    COUNT(*)::int AS pedidos
+             FROM pedidos p
+             WHERE ${FILTRO_PEDIDO_PAGO_NO_PERIODO}
+             GROUP BY 1
+         )
+         -- A primeira semana costuma começar antes do período (na segunda-
+         -- feira anterior), mas só soma a partir do início dele; o rótulo diz
+         -- de onde a conta começa, não de onde a semana do calendário começa.
+         SELECT to_char(GREATEST(b.periodo, $1::date::timestamp), 'YYYY-MM-DD') AS periodo,
+                COALESCE(v.receita, 0) AS receita,
+                COALESCE(v.pedidos, 0) AS pedidos
+         FROM baldes b
+         LEFT JOIN vendas v ON v.periodo = b.periodo
+         ORDER BY b.periodo`,
+        [inicio, fim, granularidade]
+    );
+
+    return resultado.rows.map((linha) => ({
+        periodo: linha.periodo,
+        receita: Number(linha.receita),
+        pedidos: linha.pedidos
+    }));
+}
+
+// Agrupa pelo produto, não pelo nome gravado no item: um produto renomeado no
+// meio do período apareceria duas vezes. Produto já excluído do catálogo
+// (produto_id nulo) fica agrupado pelo nome da época.
+//
+// A receita aqui é a soma dos itens, antes do cupom: o desconto é do pedido
+// inteiro, e ratear entre os itens seria inventar um número.
+async function maisVendidos(inicio, fim) {
+    const resultado = await pool.query(
+        `SELECT i.produto_id,
+                COALESCE(MAX(pr.nome), MAX(i.nome)) AS nome,
+                SUM(i.quantidade)::int AS qtd,
+                SUM(i.total) AS receita
+         FROM pedido_itens i
+         JOIN pedidos p ON p.id = i.pedido_id
+         LEFT JOIN produtos pr ON pr.id = i.produto_id
+         WHERE ${FILTRO_PEDIDO_PAGO_NO_PERIODO}
+         GROUP BY i.produto_id, CASE WHEN i.produto_id IS NULL THEN i.nome END
+         ORDER BY qtd DESC, receita DESC, nome ASC
+         LIMIT 10`,
+        [inicio, fim]
+    );
+
+    return resultado.rows.map((linha) => ({
+        produtoId: linha.produto_id,
+        nome: linha.nome,
+        qtd: linha.qtd,
+        receita: Number(linha.receita)
+    }));
+}
+
+// Independe do período da tela: olha o histórico inteiro. Entra o produto à
+// venda, com estoque, que nunca teve venda paga ou cuja última foi há 15 dias
+// ou mais. Os nunca vendidos vêm primeiro — é o giro mais parado que existe.
+async function produtosParados() {
+    const resultado = await pool.query(
+        `SELECT pr.id, pr.nome, pr.estoque,
+                MAX(p.criado_em) AS ultima_venda,
+                FLOOR(EXTRACT(EPOCH FROM (NOW() - MAX(p.criado_em))) / 86400)::int AS dias_sem_venda
+         FROM produtos pr
+         LEFT JOIN pedido_itens i ON i.produto_id = pr.id
+         LEFT JOIN pedidos p ON p.id = i.pedido_id AND p.status = 'Pago'
+         WHERE pr.ativo = TRUE AND pr.estoque > 0
+         GROUP BY pr.id, pr.nome, pr.estoque
+         HAVING MAX(p.criado_em) IS NULL
+             OR MAX(p.criado_em) <= NOW() - make_interval(days => $1)
+         ORDER BY ultima_venda ASC NULLS FIRST, pr.nome ASC`,
+        [DIAS_PARA_PARADO]
+    );
+
+    return resultado.rows.map((linha) => ({
+        id: linha.id,
+        nome: linha.nome,
+        estoque: linha.estoque,
+        ultimaVenda: linha.ultima_venda,
+        diasSemVenda: linha.dias_sem_venda
+    }));
+}
+
+// Variação contra o período anterior. Sem base (anterior zerado) não há
+// percentual que faça sentido: devolve null, e a tela diz que o período
+// anterior não teve vendas.
+function variacaoPercentual(atual, anterior) {
+    if (!(anterior > 0)) return null;
+    return Math.round(((atual - anterior) / anterior) * 1000) / 10;
+}
+
+async function montarRelatorioDeVendas({ periodo, anterior }) {
+    const [atual, passado, serie, ranking] = await Promise.all([
+        totaisDeVendas(periodo.inicio, periodo.fim),
+        totaisDeVendas(anterior.inicio, anterior.fim),
+        serieDeVendas(periodo),
+        maisVendidos(periodo.inicio, periodo.fim)
+    ]);
+
+    return {
+        periodo,
+        periodoAnterior: anterior,
+        resumo: {
+            receita: atual.receita,
+            receitaDeltaPct: variacaoPercentual(atual.receita, passado.receita),
+            pedidos: atual.pedidos,
+            pedidosDeltaPct: variacaoPercentual(atual.pedidos, passado.pedidos),
+            ticketMedio: atual.ticketMedio,
+            ticketMedioDeltaPct: variacaoPercentual(atual.ticketMedio, passado.ticketMedio)
+        },
+        serie,
+        maisVendidos: ranking
+    };
+}
+
+app.get('/admin/relatorios/vendas', limitadorAdmin, autenticarToken, exigirAdmin, async (req, res) => {
+    const leitura = lerPeriodoDoRelatorio(req.query);
+    if (leitura.erro) {
+        return res.status(400).json({ mensagem: leitura.erro });
+    }
+
+    try {
+        return res.json(await montarRelatorioDeVendas(leitura));
+    } catch (erro) {
+        console.error('Erro ao montar o relatório de vendas:', erro);
+        return res.status(500).json({ mensagem: 'Não foi possível montar o relatório.' });
+    }
+});
+
+app.get('/admin/relatorios/parados', limitadorAdmin, autenticarToken, exigirAdmin, async (req, res) => {
+    try {
+        return res.json({ diasParaParado: DIAS_PARA_PARADO, produtos: await produtosParados() });
+    } catch (erro) {
+        console.error('Erro ao listar produtos parados:', erro);
+        return res.status(500).json({ mensagem: 'Não foi possível listar os produtos parados.' });
+    }
+});
+
+// Campo de CSV: aspas quando há vírgula, aspas ou quebra de linha. E um
+// apóstrofo na frente do que começa com = + - @: o Excel executaria como
+// fórmula um nome de produto como "=HYPERLINK(...)".
+function campoCsv(valor) {
+    let texto = valor === null || valor === undefined ? '' : String(valor);
+
+    if (/^[=+\-@\t\r]/.test(texto)) {
+        texto = `'${texto}`;
+    }
+
+    return /[",\r\n]/.test(texto) ? `"${texto.replace(/"/g, '""')}"` : texto;
+}
+
+function linhaCsv(campos) {
+    return campos.map(campoCsv).join(',');
+}
+
+function dataCurta(instante) {
+    if (!instante) return '';
+    return new Intl.DateTimeFormat('en-CA', {
+        timeZone: FUSO_DA_LOJA, year: 'numeric', month: '2-digit', day: '2-digit'
+    }).format(new Date(instante));
+}
+
+app.get('/admin/relatorios/exportar', limitadorAdmin, autenticarToken, exigirAdmin, async (req, res) => {
+    const leitura = lerPeriodoDoRelatorio(req.query);
+    if (leitura.erro) {
+        return res.status(400).json({ mensagem: leitura.erro });
+    }
+
+    try {
+        const [vendas, parados] = await Promise.all([montarRelatorioDeVendas(leitura), produtosParados()]);
+        const { inicio, fim, granularidade } = leitura.periodo;
+
+        const linhas = [
+            'Receita e pedidos por período',
+            linhaCsv([granularidade === 'week' ? 'Semana (início)' : 'Data', 'Receita', 'Pedidos']),
+            ...vendas.serie.map((ponto) => linhaCsv([ponto.periodo, ponto.receita.toFixed(2), ponto.pedidos])),
+            '',
+            'Produtos mais vendidos',
+            linhaCsv(['Produto', 'Quantidade', 'Receita']),
+            ...vendas.maisVendidos.map((item) => linhaCsv([item.nome, item.qtd, item.receita.toFixed(2)])),
+            '',
+            'Produtos parados no estoque',
+            linhaCsv(['Produto', 'Estoque', 'Última venda']),
+            ...parados.map((item) => linhaCsv([
+                item.nome,
+                item.estoque,
+                item.ultimaVenda ? dataCurta(item.ultimaVenda) : 'nunca vendido'
+            ]))
+        ];
+
+        res.set('Content-Type', 'text/csv; charset=utf-8');
+        res.set('Content-Disposition', `attachment; filename="relatorio-petabyte-${inicio}-a-${fim}.csv"`);
+        // O BOM faz o Excel ler o arquivo como UTF-8; sem ele, "Última" vira
+        // "Ãšltima". CRLF é o fim de linha que o formato CSV define.
+        return res.send(`﻿${linhas.join('\r\n')}\r\n`);
+    } catch (erro) {
+        console.error('Erro ao exportar o relatório:', erro);
+        return res.status(500).json({ mensagem: 'Não foi possível exportar o relatório.' });
     }
 });
 

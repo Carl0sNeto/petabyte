@@ -13,8 +13,8 @@
         <div class="container topo-barra">
             <a class="marca" href="E-Commerce.html">Peta<em>byte</em> <span>Tecnologia</span></a>
             <nav class="topo-nav" aria-label="Navegação principal">
-                <a href="#produtos">Produtos</a>
-                <a href="#promocoes">Ofertas</a>
+                <a href="catalogo.html">Catálogo</a>
+                <a href="#promocoes">Destaques</a>
                 <a href="#contato">Contato</a>
             </nav>
             <div class="topo-acoes">
@@ -44,8 +44,8 @@
                 <h1>Tecnologia de verdade, <em>com preço justo</em></h1>
                 <p>Notebooks, periféricos, áudio e componentes selecionados. Compra segura, entrega rastreada e garantia oficial em todo o catálogo.</p>
                 <div class="acoes">
-                    <a class="btn btn-primary" href="#promocoes">Ver ofertas</a>
-                    <a class="btn btn-fantasma" href="#produtos">Explorar categorias</a>
+                    <a class="btn btn-primary" href="#promocoes">Ver destaques</a>
+                    <a class="btn btn-fantasma" href="catalogo.html">Explorar o catálogo</a>
                 </div>
             </div>
 
@@ -82,19 +82,19 @@
         <section class="secao" id="promocoes">
             <div class="secao-titulo">
                 <h2>Destaques do catálogo</h2>
-                <span class="apoio">Preços à vista • estoque atualizado em tempo real</span>
+                <a class="link-secao" href="catalogo.html">Ver o catálogo completo →</a>
             </div>
 
-            <!-- Preenchido por renderFiltros() com as categorias que têm
-                 produto à venda. Fixar aqui deixava o filtro desatualizado
-                 sempre que o catálogo mudava. -->
-            <div class="filtros" id="filtrosCategoria" role="group" aria-label="Filtrar por categoria"></div>
-
-            <!-- Preenchido por renderProductGrid() a partir de GET /produtos.
-                 Os preços vivem no banco, não neste arquivo. -->
+            <!-- Preenchido por renderProductGrid() a partir de GET
+                 /produtos/destaques, a seleção feita no painel. Busca e
+                 filtros ficam em catalogo.html. -->
             <div class="grade-produtos" id="productGrid">
                 <p class="muted">Carregando produtos...</p>
             </div>
+
+            <p class="vitrine-rodape">
+                <a class="btn btn-secondary" href="catalogo.html">Ver todos os produtos</a>
+            </p>
         </section>
 
         <section class="secao" id="produtos">
@@ -143,7 +143,7 @@
                     <ul>
                         <li><a href="#produtos">Sobre a loja</a></li>
                         <li><a href="#contato">Fale conosco</a></li>
-                        <li><a href="#promocoes">Ofertas</a></li>
+                        <li><a href="catalogo.html">Catálogo completo</a></li>
                     </ul>
                 </div>
                 <div>

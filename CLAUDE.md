@@ -5,12 +5,12 @@ trás das decisões sobreviva à troca de contexto: se você está lendo isto se
 acompanhado o histórico, comece por aqui.
 
 O companheiro dele é o [`DATABASE.md`](DATABASE.md), que descreve as tabelas
-coluna a coluna, a taxonomia de categorias, as 7 migrations e como criar o
+coluna a coluna, a taxonomia de categorias, as 12 migrations e como criar o
 primeiro administrador. Aqui ficam as decisões e o porquê; lá, o schema.
 
 **Repositório:** https://github.com/Carl0sNeto/petabyte (público)
-**Última revisão deste documento:** 24/09/2026 (login com Google, cupons de
-desconto, confirmação de e-mail no cadastro e fim do frete grátis).
+**Última revisão deste documento:** 25/09/2026 (relatórios do painel, menu
+lateral, destaques na home e catálogo com busca e paginação).
 
 > A data acima já ficou parada em 17/08 enquanto o corpo do arquivo era alterado
 > em 22/08 e 09/09. Se você mexer neste documento, mexa nesta linha junto.
@@ -21,7 +21,7 @@ desconto, confirmação de e-mail no cadastro e fim do frete grátis).
 
 | Camada | Tecnologia |
 |--------|------------|
-| Servidor | Node.js 24 + Express 5, arquivo único `server.js` (~3.500 linhas) |
+| Servidor | Node.js 24 + Express 5, arquivo único `server.js` (~4.400 linhas) |
 | Banco | PostgreSQL, acesso via `pg` sem ORM |
 | Front-end | HTML + CSS + JavaScript puro, sem framework nem build |
 | Pagamento | Mercado Pago (Checkout Pro, por redirecionamento) |
@@ -38,7 +38,7 @@ seguinte.
 
 ```bash
 npm start           # sobe na porta 3000
-npm test            # 129 casos, em série, contra o banco real
+npm test            # 157 casos, em série, contra o banco real
 npm run migrate     # aplica migrations/*.sql em ordem
 npm run criar-admin -- email@exemplo.com    # promove uma conta a administrador
 ```
@@ -130,6 +130,63 @@ passa por `npm run criar-admin`, que exige acesso ao servidor.
 > Esconder a interface no navegador é conveniência de usabilidade, não
 > segurança. A proteção real são os middlewares.
 
+Há um nível de admin só. Uma hierarquia (operador, financeiro) foi avaliada
+junto com os relatórios e adiada: conceder acesso pela interface abriria uma
+superfície de ataque nova sem necessidade real enquanto uma pessoa só opera o
+painel.
+
+### Relatórios: receita sem frete, no calendário da loja
+
+`/admin/relatorios/vendas`, `/parados` e `/exportar` (CSV), atrás de
+`autenticarToken` + `exigirAdmin` como o resto do painel.
+
+- **Receita é `subtotal - desconto`.** A spec dizia "soma `subtotal`, nunca
+  `total`" — para tirar o frete —, mas foi escrita antes dos cupons: com eles,
+  o subtotal conta um dinheiro que não entrou. Na tabela de mais vendidos a
+  receita é a soma dos itens, **antes** do cupom, porque o desconto é do pedido
+  inteiro e ratear entre os itens seria inventar um número; a tela diz isso.
+- **Só pedido `Pago` conta**, o mesmo critério de `comprouOProduto()`.
+- **O dia é o de São Paulo, não o do banco.** `pedidos.criado_em` é
+  `TIMESTAMP` sem fuso, gravado no relógio da sessão — UTC no Neon, -03:00 no
+  Postgres local. `DATA_DO_PEDIDO_NA_LOJA` reinterpreta no fuso da sessão e
+  converte para o da loja; sem isso, no Neon, um pedido das 22h cairia no dia
+  seguinte. `tests/relatorios-fuso.test.js` sobe o pool com `PGOPTIONS=-c
+  TimeZone=UTC` só para provar isso — no banco local a conversão não muda nada.
+- **Os dois extremos entram no período**, e o último dia vai até 23:59. O
+  `BETWEEN inicio AND fim` da spec, com datas, parava à meia-noite do último
+  dia e perdia o dia inteiro.
+- **A variação dos cards compara com o intervalo anterior do mesmo tamanho.**
+  Sem vendas nele, vem `null` e a tela diz "período anterior sem vendas".
+- **A granularidade é do servidor:** diário até 60 dias, semanal acima. A série
+  tem um ponto por dia (ou semana) **inclusive sem venda**. A primeira semana
+  leva a data de início do período, não a da segunda-feira anterior, porque só
+  soma a partir dele.
+- **Parados ignoram o período da tela:** à venda, com estoque, sem venda paga
+  há 15 dias ou mais, os nunca vendidos primeiro.
+- **O CSV neutraliza fórmula** (apóstrofo antes de `=`, `+`, `-`, `@`) e leva
+  BOM, para o Excel abrir "Última" sem virar "Ãšltima".
+- **O botão Exportar é um link comum**, mas renova a sessão antes de seguir:
+  com o access token de 15 minutos, quem ficou olhando o gráfico baixaria um
+  "sessão expirada" no lugar da planilha.
+- **O gráfico é SVG à mão**, sem biblioteca (não há build para justificá-la):
+  colunas numa cor só, dica de valor no mouse e nas setas do teclado, e a
+  mesma série numa tabela logo abaixo.
+
+### Painel com menu lateral, não abas
+
+As abas horizontais viraram um menu hambúrguer em qualquer largura de tela
+(decisão da spec, não um breakpoint). O menu é um `<dialog>` modal: vai para a
+camada do topo, fora de qualquer `overflow` — a mesma armadilha que escondeu o
+menu da conta na loja — e o navegador já dá Esc, foco preso e fundo inerte.
+
+- A seção aberta fica no hash (`admin.html#relatorios`): recarregar não volta
+  para Produtos.
+- `mostrarSecao()` dispara o evento `painel:secao`; `admin-relatorios.js` só
+  carrega os dados na primeira abertura da seção.
+- **`fecharMenu()` atualiza o `aria-expanded` na hora**, sem esperar o evento
+  `close` do dialog. Ele é assíncrono, e com a janela encoberta não chegou
+  nunca — foi assim que o botão ficou preso em "aberto" na verificação.
+
 ### Assinatura do webhook é opcional, de propósito
 
 Sem `MP_WEBHOOK_SECRET` definido, a validação HMAC é pulada e um aviso vai para
@@ -143,8 +200,45 @@ A constante `CATEGORIAS` em `server.js` guarda `{ slug, rotulo }`. O banco
 armazena o slug; a interface mostra o rótulo. Manter os dois no mesmo lugar
 evita que a loja e o painel inventem traduções próprias.
 
-`GET /produtos` devolve só as categorias que têm produto à venda, e a loja monta
-os filtros a partir daí. Não há categoria fixa no HTML.
+`GET /produtos` devolve em `categoriasDisponiveis` só as categorias que têm
+produto à venda, e o catálogo monta os filtros a partir daí. Não há categoria
+fixa no HTML.
+
+### Home curada, catálogo com busca
+
+A home (`E-Commerce.html`) mostra só os produtos marcados como **destaque** no
+painel (`GET /produtos/destaques`); busca, filtros e paginação ficam em
+`catalogo.html`. Destaque é escolha do administrador, não cálculo — nem "mais
+vendido" nem "mais recente".
+
+- **Destaque só aparece se o produto estiver à venda.** `destaque = TRUE AND
+  ativo = TRUE`, sempre juntos. O painel marca com "destaque · oculto" o
+  produto em destaque que saiu do catálogo, para ninguém procurar na home.
+- **Desmarcar o destaque apaga a posição** (`ordem_destaque = NULL`). Uma ordem
+  esquecida voltaria a valer sozinha quando o produto fosse marcado de novo.
+- **A migration 009 marcou os 8 primeiros destaques**, uma única vez (só
+  quando cria a coluna), para a home do deploy não abrir vazia. Depois disso a
+  curadoria é do painel, e a migration não a toca mais.
+- **Toda ordenação desempata pelo id.** Sem isso, produtos de mesmo preço ou
+  nome podem trocar de lugar entre duas consultas, e a página 2 repete ou pula
+  item da página 1.
+- **`%` e `_` da busca são escapados** antes do `ILIKE`: buscar "100%" não pode
+  virar "tudo que começa com 100".
+- **As categorias do filtro não encolhem com os outros filtros.** Vêm do
+  catálogo ativo inteiro, não do resultado.
+- **Filtro malformado responde 400** (ordenação desconhecida, preço não
+  numérico, categoria que não existe), em vez de ser ignorado e devolver o
+  catálogo inteiro para quem pediu outra coisa. O `catalogo.js` é tolerante na
+  outra ponta: valor absurdo na URL cai no padrão daquele filtro.
+- **O estado do catálogo vive na URL.** Cada filtro vira uma entrada no
+  histórico (`pushState`), e a página se remonta a partir dela no carregamento,
+  no Voltar e num link compartilhado. A busca espera 400 ms de pausa na
+  digitação: sem isso, "notebook" seriam oito consultas e oito entradas.
+- **O carrinho pede os produtos pelo id** (`GET /produtos?ids=1,2,3`, até 20).
+  Com o catálogo paginado, montar o carrinho pela listagem comum faria sumir o
+  item que estivesse além da primeira página.
+- **O corpo usa `ordemDestaque`, em camelCase**, como `precoOriginal` e
+  `imagemUrl`. A spec escrevia `ordem_destaque`, que é o nome da coluna.
 
 ### O desconto anunciado arredonda para baixo
 
@@ -369,10 +463,12 @@ Já serviu `__dirname`, expondo `server.js`, `package.json`, o schema SQL e todo
 o `node_modules` por HTTP. Use a opção `index: 'E-Commerce.html'` porque não há
 `index.html`.
 
-### Imagens da vitrine não usam `loading="lazy"`
+### Imagens da home não usam `loading="lazy"`; as do catálogo, sim
 
-A vitrine é a primeira coisa que o visitante vê; adiar essas imagens atrasa
-justamente o que importa na tela. Com catálogo pequeno não há o que economizar.
+Os destaques da home são a primeira coisa que o visitante vê; adiar essas
+imagens atrasa justamente o que importa na tela. O catálogo tem página de 20 e
+rola, então lá o `renderCartaoProduto(produto, { adiarImagem: true })` pede o
+lazy.
 
 ### A porta 3000 é obrigatória
 
@@ -494,23 +590,34 @@ idempotente, então repetir a cada deploy é seguro.
 
 São **de integração**: batem no banco configurado no `.env`, não em mocks.
 
-Nove arquivos, cada um com um `test()` de nível superior e os casos como
+Onze arquivos, cada um com um `test()` de nível superior e os casos como
 subtestes (`await t.test(...)`):
 
 | Arquivo | Casos | Cobre |
 |---------|-------|-------|
-| `tests/admin.test.js` | 24 | Rotas `/admin/*`, permissão, CRUD de produto e de cupom, paginação, `/cupons/validar` |
+| `tests/admin.test.js` | 26 | Rotas `/admin/*` (inclusive relatórios), permissão, CRUD de produto e de cupom, destaque, paginação, `/cupons/validar` |
+| `tests/produto.test.js` | 24 | Página de detalhe, avaliações; destaques da home; catálogo: busca, filtros, ordenação, paginação, `ids` |
 | `tests/checkout.test.js` | 21 | Carrinho, preço do banco, estoque, frete fixo; cupom: desconto, limites, motivos, uso e estorno |
 | `tests/login-google.test.js` | 15 | Criação, vínculo por e-mail (e com conta não confirmada), `aud`/`email_verified`, conta sem senha, desconectar |
-| `tests/produto.test.js` | 13 | Página de detalhe, galeria, avaliações e quem pode avaliar |
+| `tests/relatorios.test.js` | 12 | Receita sem frete e com cupom, só pagos, último dia inteiro, variação, semanal acima de 60 dias, parados, CSV |
 | `tests/auth-sessao.test.js` | 12 | Cookies, rotação, reuso, janela de corrida, logout, CSRF, revogação por senha |
 | `tests/conta.test.js` | 12 | Central da conta: nome, troca de senha, avaliações próprias; cadastro de newsletter |
 | `tests/verificacao-email.test.js` | 11 | Provedores aceitos, força da senha, link de confirmação, reenvio, SMTP fora do ar |
 | `tests/estoque.test.js` | 8 | Baixa, idempotência, devolução por estorno |
 | `tests/recuperacao.test.js` | 4 | Token gravado como hash, invalidação dos links pendentes |
+| `tests/relatorios-fuso.test.js` | 1 | Dia do relatório no fuso da loja com o banco em UTC, como o Neon |
 
-São 120 subtestes mais os 9 de nível superior — daí os 129 que o runner conta
-(conferido rodando a suíte em 24/09/2026).
+São 146 subtestes mais os 11 de nível superior — daí os 157 que o runner conta
+(conferido rodando a suíte em 25/09/2026).
+
+- **Relatórios somam o banco inteiro**, não só as fixtures. Os pedidos de
+  `relatorios.test.js` ficam em 2001, quando a loja não existia, para pedidos
+  reais não entrarem na conta; e as datas são gravadas como horário de São
+  Paulo convertido para o relógio da sessão, para o teste valer com o banco em
+  qualquer fuso.
+- **Busca no catálogo real:** cada caso de `produto.test.js` cria produtos com
+  uma palavra que não existe no catálogo (`palavraUnica()`) e busca por ela.
+  Sem isso, a paginação e a ordenação dependeriam do que o painel cadastrou.
 
 - **O SMTP é simulado em `verificacao-email.test.js`.** O `nodemailer.createTransport`
   que o servidor usa é trocado por uma caixa de saída em memória, e o teste lê
@@ -560,9 +667,18 @@ falha que originou boa parte deste projeto.
 
 ## Front-end
 
-São oito páginas: `E-Commerce.html` (vitrine, servida como índice), `cart.html`,
-`produto.html`, `auth.html`, `redefinir-senha.html`, `verificar-email.html`,
-`perfil.html` e `admin.html`.
+São nove páginas: `E-Commerce.html` (home com os destaques, servida como
+índice), `catalogo.html`, `cart.html`, `produto.html`, `auth.html`,
+`redefinir-senha.html`, `verificar-email.html`, `perfil.html` e `admin.html`.
+
+- `public/catalogo.html` + `catalogo.js` — o catálogo completo. Carrega
+  **depois** de `script.js`, de quem reaproveita `buscarProdutos` e
+  `renderCartaoProduto`. A grade usa o mesmo `id="productGrid"` da home, e o
+  "Adicionar ao carrinho" já vem ligado por delegação em `script.js`.
+- `renderCartaoProduto()` em `script.js` é o único cartão de produto: home e
+  catálogo não podem divergir no preço, no selo ou no botão.
+- `public/admin-relatorios.js` — a seção Relatórios do painel, carregada depois
+  de `admin.js` (que já cobre produtos, pedidos e cupons).
 
 - **`auth.html` avisa na própria página** (`#avisoAuth`) o que é novo: conta
   criada à espera de confirmação e login de conta não confirmada, com o botão
@@ -596,8 +712,10 @@ São oito páginas: `E-Commerce.html` (vitrine, servida como índice), `cart.htm
 - **Botão do Google em `auth.html`:** o script da Google só é carregado se
   `GET /config` trouxer `googleClientId`. Sem ele, o bloco fica escondido — melhor
   não mostrar do que mostrar um botão que não funciona.
-- **Painel:** a aba Cupons segue o padrão de abas existente. A spec citava um
-  "menu lateral" de um `mockup-relatorios-admin.html` que não existe.
+- **Painel:** navegação por menu lateral (ver *Painel com menu lateral*). As
+  specs dos cupons e dos relatórios citavam um `mockup-relatorios-admin.html`
+  como referência de marcação; ele nunca chegou ao repositório, e o menu foi
+  desenhado a partir do texto da spec.
 - `.so-leitor` em `estilos.css` é o texto só para leitor de tela. Use onde
   `aria-label` não vale (`<del>`, `<span>` genérico).
 - `public/estilos.css` — sistema de design compartilhado por todas as páginas.
@@ -678,6 +796,10 @@ qualquer origem é aceita).
    nunca terem provado o endereço (escolha para não trancar o admin num deploy
    sem SMTP). Se isso incomodar, basta marcá-las `FALSE` à mão, uma vez, com
    SMTP já configurado.
+10. **A busca do catálogo é `ILIKE` sem índice.** Com dezenas de produtos não
+    pesa nada; com milhares, cada busca varre a tabela. O caminho, quando
+    chegar a hora, é busca full-text (`tsvector` + índice GIN), que ainda traz
+    ordenação por relevância.
 
 **Resolvidas desde a última revisão**, mantidas aqui para não serem reabertas:
 

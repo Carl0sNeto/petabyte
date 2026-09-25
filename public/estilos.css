@@ -858,6 +858,83 @@ main { padding: 2.5rem 0 3.5rem; }
 .filtro-btn.active { background: var(--marca-900); border-color: var(--marca-900); color: #fff; }
 
 /* ==========================================================================
+   Home: destaques; e catálogo completo (catalogo.html)
+   ========================================================================== */
+
+.link-secao { font-size: .92rem; font-weight: 700; }
+
+.vitrine-rodape { margin: 1.4rem 0 0; text-align: center; }
+
+/* Lista vazia (nenhum destaque, nenhum resultado): ocupa a linha inteira da
+   grade, em vez de se espremer na largura de um cartão. */
+.vitrine-vazia {
+    grid-column: 1 / -1;
+    background: var(--superficie);
+    border: 1px dashed var(--borda-forte);
+    border-radius: var(--raio-g);
+    padding: 2.2rem 1.2rem;
+    text-align: center;
+    color: var(--texto-2);
+}
+.vitrine-vazia p { margin-bottom: 1rem; }
+
+/* O h1 da página tem o tamanho dos títulos de seção: aqui ele nomeia a
+   lista, não abre uma vitrine. */
+.catalogo-titulo { font-size: clamp(1.3rem, 2.4vw, 1.7rem); margin: 0; }
+.catalogo-titulo:focus { outline: none; }
+
+.catalogo-filtros {
+    background: var(--superficie);
+    border: 1px solid var(--borda);
+    border-radius: var(--raio-g);
+    padding: 1.1rem 1.2rem .3rem;
+    margin-bottom: 1.4rem;
+    box-shadow: var(--sombra-1);
+}
+.campo-busca { margin-bottom: .9rem; }
+.catalogo-filtros .filtros { margin-bottom: .9rem; }
+
+.catalogo-linha {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr)) auto;
+    gap: .8rem;
+    align-items: end;
+    margin-bottom: .9rem;
+}
+
+.paginacao-catalogo {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: .5rem;
+    flex-wrap: wrap;
+    margin-top: 1.8rem;
+    font-weight: 700;
+    font-size: .92rem;
+}
+.paginacao-catalogo:empty { display: none; }
+.paginacao-catalogo .paginas { display: flex; gap: .3rem; flex-wrap: wrap; justify-content: center; }
+
+.pagina-numero,
+.pagina-passo {
+    min-width: 2.5rem;
+    min-height: 2.5rem;
+    padding: 0 .75rem;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: var(--raio);
+    border: 1px solid var(--borda-forte);
+    background: var(--superficie);
+    color: var(--texto);
+}
+a.pagina-numero:hover,
+a.pagina-passo:hover { border-color: var(--acao); color: var(--acao); text-decoration: none; }
+.pagina-numero.atual { background: var(--marca-900); border-color: var(--marca-900); color: #fff; }
+.pagina-passo.desabilitado { color: var(--texto-3); border-color: var(--borda); background: var(--superficie-2); }
+.pagina-reticencias { color: var(--texto-3); padding: 0 .2rem; }
+
+/* ==========================================================================
    Cartões genéricos, formulários e tabelas
    ========================================================================== */
 
@@ -1370,6 +1447,27 @@ form.empilhado { display: flex; flex-direction: column; gap: .85rem; }
     .rodape-grade { grid-template-columns: 1fr; }
     .rodape { padding-top: 2rem; }
 
+    /* Filtros do catálogo: preços lado a lado, ordenação e "Limpar" embaixo,
+       cada um na largura toda. As categorias viram faixa rolável, como a
+       navegação do topo. */
+    .catalogo-filtros { padding: .9rem .9rem .2rem; }
+    .catalogo-linha { grid-template-columns: 1fr 1fr; }
+    .catalogo-linha > div:nth-child(3),
+    .catalogo-linha > .btn { grid-column: 1 / -1; }
+    .catalogo-filtros .filtros {
+        flex-wrap: nowrap;
+        overflow-x: auto;
+        scrollbar-width: none;
+        margin-left: -.9rem;
+        margin-right: -.9rem;
+        padding: 0 .9rem;
+    }
+    .catalogo-filtros .filtros::-webkit-scrollbar { display: none; }
+    .filtro-btn { white-space: nowrap; }
+
+    .pagina-passo { flex: 1 1 40%; }
+    .paginacao-catalogo .paginas { order: -1; flex-basis: 100%; }
+
     /* No carrinho, nome em cima e controles embaixo ocupando a linha toda. */
     .item-carrinho { flex-direction: column; align-items: stretch; gap: .7rem; }
     .acoes-item { justify-content: space-between; }
@@ -1439,6 +1537,8 @@ form.empilhado { display: flex; flex-direction: column; gap: .85rem; }
     .contador .qtd { min-width: 2.8rem; }
 
     .btn-remover { min-height: 44px; padding: .3rem .6rem; }
+
+    .pagina-numero, .pagina-passo { min-width: 44px; min-height: 44px; }
 
     input, select, textarea { min-height: 46px; font-size: 16px; }
     textarea { min-height: 90px; }

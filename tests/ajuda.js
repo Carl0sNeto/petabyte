@@ -12,14 +12,28 @@ const { pool } = require('../server.js');
 
 const PREFIXO = `__teste_${process.pid}_${Math.random().toString(36).slice(2, 8)}__`;
 
-async function criarProduto({ preco, estoque, nome = null, ativo = true }) {
-    const nomeUnico = nome || `${PREFIXO}produto_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+// O nome sempre começa com o PREFIXO, para o limpar() achar; um `nome` passado
+// entra depois dele.
+async function criarProduto({
+    preco,
+    estoque,
+    nome = null,
+    ativo = true,
+    categoria = 'hardware',
+    descricao = 'Produto de teste',
+    tags = [],
+    destaque = false,
+    ordemDestaque = null
+}) {
+    const sufixo = nome || `produto_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+    const nomeUnico = sufixo.startsWith(PREFIXO) ? sufixo : `${PREFIXO}${sufixo}`;
 
     const resultado = await pool.query(
-        `INSERT INTO produtos (nome, descricao, preco, categoria, imagem_url, estoque, ativo)
-         VALUES ($1, 'Produto de teste', $2, 'hardware', '', $3, $4)
+        `INSERT INTO produtos (nome, descricao, preco, categoria, imagem_url, estoque, ativo,
+                               tags, destaque, ordem_destaque)
+         VALUES ($1, $2, $3, $4, '', $5, $6, $7, $8, $9)
          RETURNING id, nome, preco, estoque`,
-        [nomeUnico, preco, estoque, ativo]
+        [nomeUnico, descricao, preco, categoria, estoque, ativo, tags, destaque, ordemDestaque]
     );
 
     return resultado.rows[0];

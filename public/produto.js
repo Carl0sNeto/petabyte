@@ -43,7 +43,7 @@ function renderTrilha(produto) {
     document.getElementById('trilha').innerHTML = `
         <a href="E-Commerce.html">Início</a>
         <span aria-hidden="true">›</span>
-        <a href="E-Commerce.html#promocoes">${escapeHtml(produto.categoriaRotulo)}</a>
+        <a href="catalogo.html?categoria=${encodeURIComponent(produto.categoria)}">${escapeHtml(produto.categoriaRotulo)}</a>
         <span aria-hidden="true">›</span>
         <span class="atual">${escapeHtml(produto.nome)}</span>`;
 }

@@ -7,7 +7,7 @@
 -- Guarda só o SHA-256 do token, como password_resets: o valor bruto existe
 -- apenas no cookie do navegador, e um dump desta tabela não abre sessão nenhuma.
 --
--- Entrou antes da 008 e da 010, que vieram depois; a 009 segue reservada. O
+-- Entrou antes da 008, da 009 e da 010, que vieram depois. O
 -- runner aplica em ordem alfabética e não se importa com lacunas nem com a
 -- ordem em que os arquivos chegaram: tudo aqui é idempotente.
 --
