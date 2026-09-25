@@ -1020,14 +1020,38 @@ form.empilhado { display: flex; flex-direction: column; gap: .85rem; }
     line-height: 1.45;
 }
 
-.frete-gratis {
-    background: var(--sucesso-suave);
-    color: var(--sucesso);
-    padding: .55rem .8rem;
-    border-radius: var(--raio);
-    font-size: .84rem;
-    font-weight: 700;
-    margin: .6rem 0;
+/* Desconto é oferta: leva o laranja reservado a preço e oferta. */
+.resumo-desconto strong { color: var(--preco); }
+.codigo-cupom { font-size: .78rem; font-weight: 700; letter-spacing: .02em; }
+
+.form-cupom {
+    margin: .9rem 0 .2rem;
+    padding-top: .9rem;
+    border-top: 1px solid var(--borda);
+}
+.form-cupom label { font-size: .84rem; font-weight: 700; color: var(--texto-2); }
+.form-cupom-linha { display: flex; gap: .5rem; margin-top: .35rem; }
+.form-cupom-linha input {
+    flex: 1;
+    min-width: 0;
+    text-transform: uppercase;
+    letter-spacing: .03em;
+}
+.form-cupom-linha input::placeholder { text-transform: none; letter-spacing: normal; }
+.form-cupom .aviso-conta { margin: .6rem 0 0; font-size: .84rem; padding: .55rem .75rem; }
+
+/* Ação secundária com cara de link, mas <button>: não navega para lugar nenhum. */
+.link-botao {
+    background: none;
+    border: 0;
+    padding: 0;
+    margin-top: .45rem;
+    color: var(--acao);
+    font: inherit;
+    font-size: .82rem;
+    font-weight: 600;
+    cursor: pointer;
+    text-decoration: underline;
 }
 
 /* ==========================================================================
@@ -1068,6 +1092,10 @@ form.empilhado { display: flex; flex-direction: column; gap: .85rem; }
 .aviso-conta-erro { background: var(--erro-suave); color: var(--erro); border: 1px solid #f3c9c9; }
 
 .rodape-conta-secao { margin-top: 1.5rem; padding-top: 1.2rem; border-top: 1px solid var(--borda); }
+
+.bloco-google-conta { margin-top: 1.5rem; padding-top: 1.2rem; border-top: 1px solid var(--borda); }
+.bloco-google-conta h3 { margin-top: 0; }
+.status-google { font-weight: 600; margin: 0 0 .7rem; }
 
 /* Histórico de compras */
 .lista-pedidos { display: flex; flex-direction: column; gap: .8rem; }
@@ -1160,6 +1188,26 @@ form.empilhado { display: flex; flex-direction: column; gap: .85rem; }
     font-size: .88rem;
 }
 .caixa-conta .rodape-conta p { margin: .35rem 0; }
+
+/* Regra do campo, abaixo dele: quem digita vê antes de errar, não depois. */
+.dica-campo { font-size: .78rem; color: var(--texto-2); margin: .35rem 0 0; line-height: 1.4; }
+
+#avisoAuth .link-botao { display: block; }
+
+/* Botão da Google: o desenho é dela, aqui só o espaço em volta. */
+.bloco-google { margin-bottom: 1.2rem; }
+.botao-google { display: flex; justify-content: center; min-height: 44px; }
+.bloco-google .aviso-conta { margin: .8rem 0 0; }
+.separador-ou {
+    display: flex;
+    align-items: center;
+    gap: .8rem;
+    margin-top: 1.2rem;
+    color: var(--texto-3);
+    font-size: .82rem;
+}
+.separador-ou::before,
+.separador-ou::after { content: ''; flex: 1; border-top: 1px solid var(--borda); }
 
 /* ==========================================================================
    Rodapé

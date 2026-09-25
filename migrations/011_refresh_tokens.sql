@@ -7,8 +7,9 @@
 -- Guarda só o SHA-256 do token, como password_resets: o valor bruto existe
 -- apenas no cookie do navegador, e um dump desta tabela não abre sessão nenhuma.
 --
--- A numeração pula 008 a 010, reservados para specs que ainda não entraram. O
--- runner aplica em ordem alfabética e não se importa com lacunas.
+-- Entrou antes da 008 e da 010, que vieram depois; a 009 segue reservada. O
+-- runner aplica em ordem alfabética e não se importa com lacunas nem com a
+-- ordem em que os arquivos chegaram: tudo aqui é idempotente.
 --
 -- Idempotente: pode ser executada mais de uma vez com segurança.
 

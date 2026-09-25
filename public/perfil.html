@@ -97,22 +97,40 @@
                         <button class="btn btn-primary" type="submit">Salvar dados</button>
                     </form>
 
+                    <!-- Com senha: trocar (pede a atual). Conta só-Google: definir
+                         a primeira (sem campo de senha atual). conta.js decide
+                         pelo temSenha de GET /auth/me. -->
                     <form class="empilhado" id="formSenha">
-                        <h3>Trocar senha</h3>
-                        <div>
+                        <h3 id="tituloFormSenha">Trocar senha</h3>
+                        <p id="dicaDefinirSenha" class="muted hidden" style="font-size:.82rem;margin:0">
+                            Sua conta entra pelo Google. Defina uma senha para entrar também com e-mail e senha.
+                        </p>
+                        <div id="blocoSenhaAtual">
                             <label for="campoSenhaAtual">Senha atual</label>
                             <input id="campoSenhaAtual" type="password" autocomplete="current-password" required>
                         </div>
                         <div>
                             <label for="campoSenhaNova">Nova senha</label>
-                            <input id="campoSenhaNova" type="password" autocomplete="new-password" minlength="8" required>
+                            <input id="campoSenhaNova" type="password" autocomplete="new-password" minlength="8" maxlength="72"
+                                   required aria-describedby="dicaSenhaNova">
+                            <p id="dicaSenhaNova" class="dica-campo">
+                                Pelo menos 8 caracteres, com letras e números, sem conter o seu e-mail.
+                            </p>
                         </div>
                         <div>
                             <label for="campoSenhaConfirma">Confirmar nova senha</label>
                             <input id="campoSenhaConfirma" type="password" autocomplete="new-password" minlength="8" required>
                         </div>
-                        <button class="btn btn-primary" type="submit">Trocar senha</button>
+                        <button class="btn btn-primary" type="submit" id="botaoSenha">Trocar senha</button>
                     </form>
+                </div>
+
+                <div class="bloco-google-conta">
+                    <h3>Login com Google</h3>
+                    <p id="statusGoogle" class="status-google">Conectado ao Google: —</p>
+                    <button class="btn btn-secondary" type="button" id="desconectarGoogleBtn" disabled
+                            aria-describedby="dicaDesconectarGoogle">Desconectar do Google</button>
+                    <p id="dicaDesconectarGoogle" class="muted" style="font-size:.78rem;margin:.45rem 0 0"></p>
                 </div>
 
                 <div class="rodape-conta-secao">

@@ -58,5 +58,26 @@ services:
       - key: CORS_ORIGINS
         sync: false
 
+      # E-mail. Sem SMTP, NINGUÉM cria conta com senha: o cadastro exige
+      # confirmar o e-mail por link, e sem envio o servidor desfaz a conta e
+      # responde 502. Também é o que manda os links de recuperação de senha.
+      # O login com Google continua funcionando sem isto.
+      - key: SMTP_HOST
+        sync: false
+      - key: SMTP_PORT
+        value: "587"
+      - key: SMTP_USER
+        sync: false
+      - key: SMTP_PASS
+        sync: false
+      - key: SMTP_FROM
+        sync: false
+
+      # Client ID do login com Google (não é segredo; não há client secret).
+      # Vazio, o botão não aparece. No Google Cloud Console, a URL do Render
+      # precisa constar em "Origens JavaScript autorizadas", ou o botão recusa.
+      - key: GOOGLE_CLIENT_ID
+        sync: false
+
       - key: NODE_ENV
         value: production

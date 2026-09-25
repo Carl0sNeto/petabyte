@@ -9,7 +9,16 @@ const assert = require('node:assert/strict');
 const http = require('node:http');
 
 const { app } = require('../server.js');
-const { criarProduto, criarUsuario, emitirToken, cabecalhosDeSessao, definirAdmin, limpar, pool } = require('./ajuda.js');
+const {
+    criarProduto,
+    criarUsuario,
+    codigoDeCupom,
+    emitirToken,
+    cabecalhosDeSessao,
+    definirAdmin,
+    limpar,
+    pool
+} = require('./ajuda.js');
 
 let servidor;
 let base;
@@ -74,7 +83,10 @@ test('painel administrativo', async (t) => {
         ['PUT', '/admin/produtos/1'],
         ['DELETE', '/admin/produtos/1'],
         ['GET', '/admin/pedidos'],
-        ['GET', '/admin/pedidos/1']
+        ['GET', '/admin/pedidos/1'],
+        ['GET', '/admin/cupons'],
+        ['POST', '/admin/cupons'],
+        ['PUT', '/admin/cupons/1']
     ];
 
     await t.test('nenhuma rota /admin responde sem token', async () => {
@@ -272,5 +284,114 @@ test('painel administrativo', async (t) => {
 
         assert.equal(doAdmin.dados.usuario.admin, true);
         assert.equal(doComum.dados.usuario.admin, false);
+    });
+
+    // ------------------------------------------------------------------
+    // Cupons
+    // ------------------------------------------------------------------
+
+    const cupomValido = (extras = {}) => ({
+        codigo: codigoDeCupom(`p_${Math.random().toString(36).slice(2, 7)}`).toLowerCase(),
+        tipo: 'percentual',
+        valor: 10,
+        ...extras
+    });
+
+    await t.test('cupons: criar grava o código em maiúsculas e começa com zero usos', async () => {
+        const corpo = cupomValido();
+        const { status, dados } = await pedir('POST', '/admin/cupons', { token: tokenAdmin, corpo });
+
+        assert.equal(status, 201);
+        assert.equal(dados.cupom.codigo, corpo.codigo.toUpperCase());
+        assert.equal(dados.cupom.usos, 0);
+        assert.equal(dados.cupom.usoMaximoPorUsuario, 1, 'padrão: uma vez por cliente');
+        assert.equal(dados.cupom.usoMaximo, null, 'vazio é ilimitado');
+
+        const lista = await pedir('GET', '/admin/cupons', { token: tokenAdmin });
+        assert.ok(lista.dados.cupons.some((c) => c.id === dados.cupom.id));
+    });
+
+    await t.test('cupons: recusa dados inválidos', async () => {
+        const invalidos = [
+            cupomValido({ valor: 150 }),
+            cupomValido({ valor: 0 }),
+            cupomValido({ tipo: 'brinde' }),
+            cupomValido({ codigo: 'com espaco' }),
+            cupomValido({ codigo: 'AB' }),
+            cupomValido({ usoMaximo: 0 }),
+            cupomValido({ usoMaximoPorUsuario: 1.5 }),
+            cupomValido({ valorMinimoPedido: -1 }),
+            cupomValido({ validoDe: '2026-10-10T00:00:00Z', validoAte: '2026-10-01T00:00:00Z' }),
+            cupomValido({ validoAte: 'não é data' })
+        ];
+
+        for (const corpo of invalidos) {
+            const { status } = await pedir('POST', '/admin/cupons', { token: tokenAdmin, corpo });
+            assert.equal(status, 400, `deveria recusar ${JSON.stringify(corpo)}`);
+        }
+    });
+
+    await t.test('cupons: código repetido responde 409, sem diferenciar maiúsculas', async () => {
+        const corpo = cupomValido();
+        await pedir('POST', '/admin/cupons', { token: tokenAdmin, corpo });
+
+        const repetido = await pedir('POST', '/admin/cupons', {
+            token: tokenAdmin,
+            corpo: { ...corpo, codigo: corpo.codigo.toUpperCase() }
+        });
+        assert.equal(repetido.status, 409);
+    });
+
+    await t.test('cupons: a edição parcial é validada sobre o resultado final', async () => {
+        const criado = await pedir('POST', '/admin/cupons', { token: tokenAdmin, corpo: cupomValido({ valor: 10 }) });
+        const id = criado.dados.cupom.id;
+
+        // 150 sozinho é um valor válido, mas não para um cupom percentual.
+        const percentualDemais = await pedir('PUT', `/admin/cupons/${id}`, { token: tokenAdmin, corpo: { valor: 150 } });
+        assert.equal(percentualDemais.status, 400);
+
+        const virouFixo = await pedir('PUT', `/admin/cupons/${id}`, { token: tokenAdmin, corpo: { tipo: 'fixo', valor: 150 } });
+        assert.equal(virouFixo.status, 200);
+        assert.equal(virouFixo.dados.cupom.tipo, 'fixo');
+        assert.equal(virouFixo.dados.cupom.valor, 150);
+    });
+
+    await t.test('cupons: desativa pelo PUT, e não existe rota para apagar', async () => {
+        const criado = await pedir('POST', '/admin/cupons', { token: tokenAdmin, corpo: cupomValido() });
+        const id = criado.dados.cupom.id;
+
+        const desativado = await pedir('PUT', `/admin/cupons/${id}`, { token: tokenAdmin, corpo: { ativo: false } });
+        assert.equal(desativado.dados.cupom.ativo, false);
+
+        const apagar = await pedir('DELETE', `/admin/cupons/${id}`, { token: tokenAdmin });
+        assert.equal(apagar.status, 404, 'cupom não se apaga, se desativa');
+
+        const ainda = await pool.query('SELECT 1 FROM cupons WHERE id = $1', [id]);
+        assert.equal(ainda.rowCount, 1);
+    });
+
+    await t.test('/cupons/validar exige login e devolve a conta feita no servidor', async () => {
+        const criado = await pedir('POST', '/admin/cupons', {
+            token: tokenAdmin,
+            corpo: cupomValido({ tipo: 'fixo', valor: 25 })
+        });
+        const corpo = { codigo: criado.dados.cupom.codigo, itens: [{ id: produto.id, quantidade: 1 }] };
+
+        assert.equal((await pedir('POST', '/cupons/validar', { corpo })).status, 401, 'o limite por cliente precisa saber quem é o cliente');
+
+        const { status, dados } = await pedir('POST', '/cupons/validar', { token: tokenComum, corpo });
+        assert.equal(status, 200);
+        assert.equal(dados.valido, true);
+        assert.equal(dados.desconto, 25);
+        assert.equal(dados.subtotal, 100);
+        assert.equal(dados.frete, 19.9);
+        assert.equal(dados.total, 94.9);
+
+        const invalido = await pedir('POST', '/cupons/validar', {
+            token: tokenComum,
+            corpo: { codigo: 'NAO-EXISTE-MESMO', itens: corpo.itens }
+        });
+        assert.equal(invalido.dados.valido, false);
+        assert.match(invalido.dados.motivo, /não encontrado/);
     });
 });

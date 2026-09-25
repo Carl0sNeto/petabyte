@@ -165,10 +165,49 @@ async function salvarDados(evento) {
     }
 }
 
+// Segurança da conta: senha e Google. Quem entrou pelo Google e nunca definiu
+// senha vê "Definir senha" (sem campo de senha atual); o botão de desconectar
+// só se habilita com Google conectado E senha definida — sem senha, sair do
+// Google deixaria a conta sem nenhuma forma de entrar. O servidor recusa do
+// mesmo jeito; aqui é só para a tela não oferecer o que não vai funcionar.
+function renderSeguranca(usuario) {
+    const temSenha = usuario.temSenha !== false;
+    const googleConectado = usuario.googleConectado === true;
+
+    document.getElementById('tituloFormSenha').textContent = temSenha ? 'Trocar senha' : 'Definir senha';
+    document.getElementById('botaoSenha').textContent = temSenha ? 'Trocar senha' : 'Definir senha';
+    document.getElementById('dicaDefinirSenha').classList.toggle('hidden', temSenha);
+    document.getElementById('blocoSenhaAtual').classList.toggle('hidden', !temSenha);
+    document.getElementById('campoSenhaAtual').required = temSenha;
+
+    document.getElementById('statusGoogle').textContent = `Conectado ao Google: ${googleConectado ? 'sim' : 'não'}`;
+
+    const botao = document.getElementById('desconectarGoogleBtn');
+    const dica = document.getElementById('dicaDesconectarGoogle');
+    botao.disabled = !(googleConectado && temSenha);
+
+    if (!googleConectado) {
+        dica.textContent = 'Para conectar, use "Entrar com Google" na tela de login com este mesmo e-mail.';
+    } else if (!temSenha) {
+        dica.textContent = 'Defina uma senha primeiro: sem ela, desconectar deixaria a conta sem nenhuma forma de entrar.';
+    } else {
+        dica.textContent = 'Depois de desconectar, você entra com e-mail e senha.';
+    }
+}
+
+// Relê a conta depois de mudar senha ou Google, para a tela refletir o que o
+// servidor gravou em vez de supor.
+async function atualizarSeguranca() {
+    const dados = await chamarApi('/auth/me');
+    usuarioAtual = dados.usuario;
+    renderSeguranca(usuarioAtual);
+}
+
 async function trocarSenha(evento) {
     evento.preventDefault();
 
     const botao = evento.target.querySelector('button[type="submit"]');
+    const temSenha = !usuarioAtual || usuarioAtual.temSenha !== false;
     const senhaAtual = document.getElementById('campoSenhaAtual').value;
     const novaSenha = document.getElementById('campoSenhaNova').value;
     const confirmacao = document.getElementById('campoSenhaConfirma').value;
@@ -183,15 +222,32 @@ async function trocarSenha(evento) {
     try {
         const dados = await chamarApi('/auth/alterar-senha', {
             method: 'POST',
-            body: JSON.stringify({ senhaAtual, novaSenha })
+            body: JSON.stringify(temSenha ? { senhaAtual, novaSenha } : { novaSenha })
         });
 
         evento.target.reset();
         avisarConta(`${dados.mensagem} ${dados.aviso || ''}`.trim());
+        await atualizarSeguranca();
     } catch (erro) {
         avisarConta(erro.message, 'erro');
     } finally {
         botao.disabled = false;
+    }
+}
+
+async function desconectarGoogle() {
+    const botao = document.getElementById('desconectarGoogleBtn');
+    botao.disabled = true;
+
+    try {
+        // Sem confirmação: é reversível — entrar com Google de novo, com o
+        // mesmo e-mail, reconecta a conta.
+        const dados = await chamarApi('/auth/google/desconectar', { method: 'POST' });
+        avisarConta(dados.mensagem);
+    } catch (erro) {
+        avisarConta(erro.message, 'erro');
+    } finally {
+        await atualizarSeguranca().catch(() => renderSeguranca(usuarioAtual));
     }
 }
 
@@ -212,6 +268,7 @@ async function iniciarConta() {
 
         renderCabecalho(dados.usuario);
         preencherFormularioDados(dados.usuario);
+        renderSeguranca(dados.usuario);
         renderCompras(dados.compras || []);
 
         document.getElementById('conteudoConta').classList.remove('hidden');
@@ -237,6 +294,7 @@ document.addEventListener('DOMContentLoaded', () => {
     document.getElementById('irParaDados').addEventListener('click', () => mostrarSecao('dados'));
     document.getElementById('formDados').addEventListener('submit', salvarDados);
     document.getElementById('formSenha').addEventListener('submit', trocarSenha);
+    document.getElementById('desconectarGoogleBtn').addEventListener('click', desconectarGoogle);
     document.getElementById('logoutBtn').addEventListener('click', logoutUser);
 
     // Voltar/avançar do navegador troca a seção sem recarregar.

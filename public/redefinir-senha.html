@@ -16,7 +16,11 @@
         <form id="resetForm" class="empilhado">
             <div>
                 <label for="novaSenha">Nova senha</label>
-                <input id="novaSenha" type="password" placeholder="Digite a nova senha" autocomplete="new-password" required>
+                <input id="novaSenha" type="password" placeholder="Digite a nova senha" autocomplete="new-password"
+                       minlength="8" maxlength="72" required aria-describedby="dicaNovaSenha">
+                <p id="dicaNovaSenha" class="dica-campo">
+                    Pelo menos 8 caracteres, com letras e números, sem conter o seu e-mail.
+                </p>
             </div>
             <div>
                 <label for="confirmarNovaSenha">Confirmar nova senha</label>

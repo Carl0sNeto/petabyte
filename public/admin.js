@@ -446,11 +446,164 @@ async function abrirPedido(id) {
 
             <div style="margin-top:1rem">
                 ${linha('Subtotal', formatarMoeda(pedido.subtotal))}
+                ${pedido.desconto > 0
+                    ? linha(`Desconto${pedido.cupom ? ` (cupom ${escapeHtml(pedido.cupom)})` : ''}`, `− ${formatarMoeda(pedido.desconto)}`)
+                    : ''}
                 ${linha('Frete', formatarMoeda(pedido.frete))}
                 ${linha('Total', formatarMoeda(pedido.total))}
             </div>`;
     } catch (erro) {
         corpo.innerHTML = `<div class="aviso aviso-erro">${escapeHtml(erro.message)}</div>`;
+    }
+}
+
+// --------------------------------------------------------------------------
+// Cupons
+// --------------------------------------------------------------------------
+
+let cupons = [];
+let cupomEmEdicao = null;
+
+// O campo datetime-local fala em horário deste computador, sem fuso; o banco
+// guarda o instante (TIMESTAMPTZ). A conversão acontece aqui, nas duas mãos,
+// para "vale até 23:59" significar 23:59 de quem cadastrou.
+function paraCampoDataHora(iso) {
+    if (!iso) return '';
+    const data = new Date(iso);
+    const dois = (n) => String(n).padStart(2, '0');
+    return `${data.getFullYear()}-${dois(data.getMonth() + 1)}-${dois(data.getDate())}T${dois(data.getHours())}:${dois(data.getMinutes())}`;
+}
+
+function doCampoDataHora(valor) {
+    return valor ? new Date(valor).toISOString() : null;
+}
+
+function descreverDesconto(cupom) {
+    return cupom.tipo === 'percentual'
+        ? `${String(cupom.valor).replace('.', ',')}%`
+        : formatarMoeda(cupom.valor);
+}
+
+function descreverValidade(cupom) {
+    if (!cupom.validoDe && !cupom.validoAte) return '<span class="muted">sem limite</span>';
+    const de = cupom.validoDe ? formatarData(cupom.validoDe) : 'agora';
+    const ate = cupom.validoAte ? formatarData(cupom.validoAte) : 'sem fim';
+    return `${de} → ${ate}`;
+}
+
+function pillDeCupom(cupom) {
+    if (!cupom.ativo) return '<span class="pill pill-off">Desativado</span>';
+    if (cupom.validoAte && new Date(cupom.validoAte) < new Date()) return '<span class="pill pill-off">Expirado</span>';
+    if (cupom.usoMaximo !== null && cupom.usos >= cupom.usoMaximo) return '<span class="pill pill-warn">Esgotado</span>';
+    if (cupom.validoDe && new Date(cupom.validoDe) > new Date()) return '<span class="pill pill-warn">Agendado</span>';
+    return '<span class="pill pill-ok">Ativo</span>';
+}
+
+async function carregarCupons() {
+    const corpo = document.getElementById('listaCupons');
+
+    try {
+        const dados = await chamarApi('/admin/cupons');
+        cupons = dados.cupons;
+
+        if (cupons.length === 0) {
+            corpo.innerHTML = '<tr><td colspan="8" class="muted">Nenhum cupom cadastrado.</td></tr>';
+            return;
+        }
+
+        corpo.innerHTML = cupons.map((cupom) => `
+            <tr>
+                <td><strong>${escapeHtml(cupom.codigo)}</strong></td>
+                <td class="num">${descreverDesconto(cupom)}</td>
+                <td class="num">${cupom.valorMinimoPedido > 0 ? formatarMoeda(cupom.valorMinimoPedido) : '<span class="muted">—</span>'}</td>
+                <td>${descreverValidade(cupom)}</td>
+                <td class="num">${cupom.usos} / ${cupom.usoMaximo === null ? '—' : cupom.usoMaximo}</td>
+                <td class="num">${cupom.usoMaximoPorUsuario}</td>
+                <td>${pillDeCupom(cupom)}</td>
+                <td>
+                    <div class="acoes">
+                        <button class="btn btn-secondary btn-sm" type="button" data-editar-cupom="${cupom.id}">Editar</button>
+                        <button class="btn btn-secondary btn-sm" type="button" data-alternar-cupom="${cupom.id}">
+                            ${cupom.ativo ? 'Desativar' : 'Ativar'}
+                        </button>
+                    </div>
+                </td>
+            </tr>`).join('');
+    } catch (erro) {
+        corpo.innerHTML = `<tr><td colspan="8" class="muted">${escapeHtml(erro.message)}</td></tr>`;
+    }
+}
+
+function abrirDialogCupom(cupom) {
+    cupomEmEdicao = cupom ? cupom.id : null;
+
+    document.getElementById('dialogCupomTitulo').textContent = cupom ? `Editar cupom ${cupom.codigo}` : 'Novo cupom';
+    document.getElementById('erroCupom').classList.add('hidden');
+    document.getElementById('campoCodigoCupom').value = cupom ? cupom.codigo : '';
+    document.getElementById('campoTipoCupom').value = cupom ? cupom.tipo : 'percentual';
+    document.getElementById('campoValorCupom').value = cupom ? cupom.valor : '';
+    document.getElementById('campoMinimoCupom').value = cupom && cupom.valorMinimoPedido > 0 ? cupom.valorMinimoPedido : '';
+    document.getElementById('campoAtivoCupom').value = cupom ? String(cupom.ativo) : 'true';
+    document.getElementById('campoUsoMaximo').value = cupom && cupom.usoMaximo !== null ? cupom.usoMaximo : '';
+    document.getElementById('campoUsoPorCliente').value = cupom ? cupom.usoMaximoPorUsuario : 1;
+    document.getElementById('campoValidoDe').value = cupom ? paraCampoDataHora(cupom.validoDe) : '';
+    document.getElementById('campoValidoAte').value = cupom ? paraCampoDataHora(cupom.validoAte) : '';
+
+    document.getElementById('dialogCupom').showModal();
+}
+
+async function salvarCupom(evento) {
+    evento.preventDefault();
+
+    const erroBox = document.getElementById('erroCupom');
+    const botao = document.getElementById('salvarCupomBtn');
+
+    // Vazio segue vazio: o servidor lê como "sem limite" / "sem data".
+    const corpo = {
+        codigo: document.getElementById('campoCodigoCupom').value,
+        tipo: document.getElementById('campoTipoCupom').value,
+        valor: document.getElementById('campoValorCupom').value,
+        valorMinimoPedido: document.getElementById('campoMinimoCupom').value,
+        ativo: document.getElementById('campoAtivoCupom').value === 'true',
+        usoMaximo: document.getElementById('campoUsoMaximo').value,
+        usoMaximoPorUsuario: document.getElementById('campoUsoPorCliente').value,
+        validoDe: doCampoDataHora(document.getElementById('campoValidoDe').value),
+        validoAte: doCampoDataHora(document.getElementById('campoValidoAte').value)
+    };
+
+    botao.disabled = true;
+
+    try {
+        if (cupomEmEdicao) {
+            await chamarApi(`/admin/cupons/${cupomEmEdicao}`, { method: 'PUT', body: JSON.stringify(corpo) });
+            avisar('Cupom atualizado.');
+        } else {
+            await chamarApi('/admin/cupons', { method: 'POST', body: JSON.stringify(corpo) });
+            avisar('Cupom criado.');
+        }
+
+        document.getElementById('dialogCupom').close();
+        await carregarCupons();
+    } catch (erro) {
+        erroBox.textContent = erro.message;
+        erroBox.classList.remove('hidden');
+    } finally {
+        botao.disabled = false;
+    }
+}
+
+// Ativar/desativar sem confirmação: é reversível com o mesmo botão, e
+// desativar não apaga nada — pedidos antigos seguem apontando para o cupom.
+async function alternarCupom(id) {
+    const cupom = cupons.find((c) => c.id === id);
+    if (!cupom) return;
+
+    try {
+        await chamarApi(`/admin/cupons/${id}`, { method: 'PUT', body: JSON.stringify({ ativo: !cupom.ativo }) });
+        avisar(cupom.ativo ? `Cupom ${cupom.codigo} desativado.` : `Cupom ${cupom.codigo} ativado.`);
+        await carregarCupons();
+    } catch (erro) {
+        avisar(erro.message, 'erro');
     }
 }
 
@@ -490,6 +643,7 @@ async function iniciar() {
 
     await carregarProdutos();
     await carregarPedidos();
+    await carregarCupons();
 }
 
 document.addEventListener('DOMContentLoaded', () => {
@@ -503,11 +657,14 @@ document.addEventListener('DOMContentLoaded', () => {
             const alvo = aba.dataset.aba;
             document.getElementById('abaProdutos').classList.toggle('hidden', alvo !== 'produtos');
             document.getElementById('abaPedidos').classList.toggle('hidden', alvo !== 'pedidos');
+            document.getElementById('abaCupons').classList.toggle('hidden', alvo !== 'cupons');
         });
     });
 
     document.getElementById('novoProdutoBtn').addEventListener('click', () => abrirDialogProduto(null));
     document.getElementById('formProduto').addEventListener('submit', salvarProduto);
+    document.getElementById('novoCupomBtn').addEventListener('click', () => abrirDialogCupom(null));
+    document.getElementById('formCupomAdmin').addEventListener('submit', salvarCupom);
     configurarPrevia();
 
     document.getElementById('sairBtn').addEventListener('click', logoutUser);
@@ -538,6 +695,19 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // Delegação: as linhas das tabelas são criadas dinamicamente.
     document.addEventListener('click', (evento) => {
+        const editarCupom = evento.target.closest('[data-editar-cupom]');
+        if (editarCupom) {
+            const cupom = cupons.find((c) => c.id === Number(editarCupom.dataset.editarCupom));
+            if (cupom) abrirDialogCupom(cupom);
+            return;
+        }
+
+        const alternar = evento.target.closest('[data-alternar-cupom]');
+        if (alternar) {
+            alternarCupom(Number(alternar.dataset.alternarCupom));
+            return;
+        }
+
         const editar = evento.target.closest('[data-editar]');
         if (editar) {
             const produto = (window.__produtos || []).find((p) => p.id === Number(editar.dataset.editar));

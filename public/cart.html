@@ -40,8 +40,23 @@
                 <h3>Resumo do pedido</h3>
                 <p id="avisoDemonstracao" class="aviso-demo hidden" role="status"></p>
                 <div class="resumo-linha"><span>Subtotal</span><strong id="cartTotal">R$ 0,00</strong></div>
+                <div class="resumo-linha resumo-desconto hidden" id="linhaDesconto">
+                    <span>Desconto <span class="codigo-cupom" id="codigoCupomAplicado"></span></span>
+                    <strong id="valorDesconto">− R$ 0,00</strong>
+                </div>
                 <div class="resumo-linha"><span>Frete</span><strong id="shippingValue">R$ 0,00</strong></div>
-                <p id="avisoFrete" class="frete-gratis hidden"></p>
+
+                <form id="formCupom" class="form-cupom" novalidate>
+                    <label for="campoCupom">Cupom de desconto</label>
+                    <div class="form-cupom-linha">
+                        <input id="campoCupom" type="text" maxlength="50" autocomplete="off"
+                               autocapitalize="characters" spellcheck="false" placeholder="Código do cupom">
+                        <button class="btn btn-secondary" type="submit" id="aplicarCupomBtn">Aplicar</button>
+                    </div>
+                    <button class="link-botao hidden" type="button" id="removerCupomBtn">Remover cupom</button>
+                    <p id="avisoCupom" class="aviso-conta hidden" role="status"></p>
+                </form>
+
                 <div class="resumo-total">
                     <span>Total</span>
                     <strong id="finalTotal">R$ 0,00</strong>

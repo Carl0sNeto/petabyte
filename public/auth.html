@@ -12,6 +12,20 @@
         <a class="marca" href="E-Commerce.html">Peta<em>byte</em></a>
         <h1>Acesse sua conta</h1>
 
+        <!-- Aparece só quando o servidor tem GOOGLE_CLIENT_ID configurado. -->
+        <div id="blocoGoogle" class="bloco-google hidden">
+            <div id="botaoGoogle" class="botao-google"></div>
+            <p id="avisoGoogle" class="aviso-conta aviso-conta-erro hidden" role="status"></p>
+            <div class="separador-ou" aria-hidden="true"><span>ou</span></div>
+        </div>
+
+        <!-- Avisos do cadastro e do login sem alert(): conta criada, e-mail
+             ainda não confirmado (com botão de reenviar o link). -->
+        <div id="avisoAuth" class="aviso-conta hidden" role="status">
+            <span id="avisoAuthTexto"></span>
+            <button class="link-botao hidden" type="button" id="reenviarVerificacaoBtn">Reenviar e-mail de confirmação</button>
+        </div>
+
         <div class="abas" role="tablist">
             <button class="aba active" type="button" data-target="login" role="tab">Entrar</button>
             <button class="aba" type="button" data-target="register" role="tab">Criar conta</button>
@@ -36,11 +50,20 @@
             </div>
             <div>
                 <label for="registerEmail">E-mail</label>
-                <input id="registerEmail" type="email" placeholder="voce@exemplo.com" autocomplete="email" required>
+                <input id="registerEmail" type="email" placeholder="voce@gmail.com" autocomplete="email" required
+                       aria-describedby="dicaEmailCadastro">
+                <p id="dicaEmailCadastro" class="dica-campo">
+                    Gmail, Outlook, Hotmail, Yahoo, iCloud, UOL, BOL, Terra e outros provedores conhecidos.
+                    Enviamos um link para confirmar.
+                </p>
             </div>
             <div>
                 <label for="registerSenha">Senha</label>
-                <input id="registerSenha" type="password" placeholder="Crie uma senha" autocomplete="new-password" required>
+                <input id="registerSenha" type="password" placeholder="Crie uma senha" autocomplete="new-password"
+                       minlength="8" maxlength="72" required aria-describedby="dicaSenhaCadastro">
+                <p id="dicaSenhaCadastro" class="dica-campo">
+                    Pelo menos 8 caracteres, com letras e números, sem conter o seu e-mail.
+                </p>
             </div>
             <div>
                 <label for="confirmarSenha">Confirmar senha</label>

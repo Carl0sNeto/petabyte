@@ -103,7 +103,7 @@ function renderCaixaCompra(produto, resumo, checkoutHabilitado) {
             ${estoque}
             ${botao}
             <p class="selo-seguranca">
-                🔒 Compra segura · 🚚 Frete grátis acima de R$ 199<br>
+                🔒 Compra segura · 🚚 Frete fixo de ${formatCurrency(getShipping())}<br>
                 ${checkoutHabilitado ? '' : 'Vitrine de demonstração: a compra não é finalizada.'}
             </p>
         </aside>`;

@@ -1,0 +1,74 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Petabyte | Confirmar e-mail</title>
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='7' fill='%23081221'/><text x='16' y='23' font-family='sans-serif' font-size='20' font-weight='700' fill='%2322d3ee' text-anchor='middle'>P</text></svg>">
+    <link rel="stylesheet" href="estilos.css">
+</head>
+<body class="pagina-conta">
+    <main class="caixa-conta">
+        <a class="marca" href="E-Commerce.html">Peta<em>byte</em></a>
+        <h1>Confirmar e-mail</h1>
+
+        <div id="avisoVerificacao" class="aviso-conta hidden" role="status"></div>
+
+        <!-- Confirma num clique, e não sozinho ao abrir: filtros de e-mail e
+             antivírus abrem links (alguns rodam JavaScript) e consumiriam o
+             token antes da pessoa. -->
+        <div id="blocoConfirmar" class="empilhado">
+            <p class="muted" style="text-align:center;margin:0">
+                Falta um passo para ativar sua conta.
+            </p>
+            <button class="btn btn-primary btn-bloco" type="button" id="confirmarEmailBtn">Confirmar meu e-mail</button>
+        </div>
+
+        <div class="rodape-conta">
+            <p><a href="auth.html" id="irParaLogin">Ir para o login</a></p>
+        </div>
+    </main>
+
+    <script src="sessao.js"></script>
+    <script>
+        const token = new URLSearchParams(window.location.search).get('token');
+        const aviso = document.getElementById('avisoVerificacao');
+        const bloco = document.getElementById('blocoConfirmar');
+        const botao = document.getElementById('confirmarEmailBtn');
+
+        function mostrar(texto, tipo) {
+            aviso.textContent = texto;
+            aviso.className = `aviso-conta ${tipo === 'erro' ? 'aviso-conta-erro' : 'aviso-conta-ok'}`;
+        }
+
+        if (!token) {
+            bloco.classList.add('hidden');
+            mostrar('Link de confirmação incompleto. Abra o link direto do e-mail que enviamos.', 'erro');
+        }
+
+        botao.addEventListener('click', async () => {
+            botao.disabled = true;
+
+            try {
+                const resposta = await requisitar('/auth/verificar-email', {
+                    method: 'POST',
+                    body: JSON.stringify({ token })
+                });
+                const dados = await lerResposta(resposta);
+
+                mostrar(dados.mensagem || 'Não foi possível confirmar o e-mail.', resposta.ok ? 'ok' : 'erro');
+
+                if (resposta.ok) {
+                    bloco.classList.add('hidden');
+                    document.getElementById('irParaLogin').textContent = 'Entrar agora';
+                }
+            } catch (erro) {
+                console.error(erro);
+                mostrar('Não foi possível conectar ao servidor.', 'erro');
+            } finally {
+                botao.disabled = false;
+            }
+        });
+    </script>
+</body>
+</html>

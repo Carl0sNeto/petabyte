@@ -25,13 +25,17 @@ async function criarProduto({ preco, estoque, nome = null, ativo = true }) {
     return resultado.rows[0];
 }
 
-async function criarUsuario({ admin = false } = {}) {
+// Conta de teste com e-mail já confirmado, por padrão: a maioria dos testes
+// quer uma conta que entra, e o banco cria contas novas NÃO confirmadas. Quem
+// testa a confirmação em si passa emailVerificado: false.
+async function criarUsuario({ admin = false, emailVerificado = true } = {}) {
     const email = `${PREFIXO}${Date.now()}_${Math.random().toString(36).slice(2, 8)}@local.test`;
 
     const resultado = await pool.query(
-        `INSERT INTO usuarios (nome, email, senha, admin) VALUES ('Usuario de Teste', $1, 'hash-irrelevante', $2)
+        `INSERT INTO usuarios (nome, email, senha, admin, email_verificado)
+         VALUES ('Usuario de Teste', $1, 'hash-irrelevante', $2, $3)
          RETURNING id, email, admin`,
-        [email, admin]
+        [email, admin, emailVerificado]
     );
 
     return resultado.rows[0];
@@ -66,16 +70,48 @@ async function lerEstoque(produtoId) {
     return resultado.rowCount === 0 ? null : Number(resultado.rows[0].estoque);
 }
 
-// Remove tudo que os testes criaram. Pedidos e histórico saem junto com o
-// usuário pelo ON DELETE CASCADE.
+// Código de cupom com o prefixo da suíte, em maiúsculas como o banco grava.
+function codigoDeCupom(sufixo) {
+    return `${PREFIXO}${sufixo}`.toUpperCase();
+}
+
+// Cria um cupom direto no banco. Os campos seguem os nomes das colunas.
+async function criarCupom({
+    sufixo = Math.random().toString(36).slice(2, 8),
+    tipo = 'percentual',
+    valor = 10,
+    ativo = true,
+    validoDe = null,
+    validoAte = null,
+    valorMinimoPedido = 0,
+    usoMaximo = null,
+    usoMaximoPorUsuario = 1
+} = {}) {
+    const resultado = await pool.query(
+        `INSERT INTO cupons (codigo, tipo, valor, ativo, valido_de, valido_ate,
+                             valor_minimo_pedido, uso_maximo, uso_maximo_por_usuario)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+         RETURNING id, codigo`,
+        [codigoDeCupom(sufixo), tipo, valor, ativo, validoDe, validoAte, valorMinimoPedido, usoMaximo, usoMaximoPorUsuario]
+    );
+
+    return resultado.rows[0];
+}
+
+// Remove tudo que os testes criaram. Pedidos, histórico, sessões e usos de
+// cupom saem junto com o usuário pelo ON DELETE CASCADE; por isso os cupons
+// vêm depois dos usuários.
 async function limpar() {
     await pool.query('DELETE FROM usuarios WHERE email LIKE $1', [`${PREFIXO}%`]);
+    await pool.query('DELETE FROM cupons WHERE codigo LIKE $1', [`${PREFIXO.toUpperCase()}%`]);
     await pool.query('DELETE FROM produtos WHERE nome LIKE $1', [`${PREFIXO}%`]);
 }
 
 module.exports = {
     criarProduto,
     criarUsuario,
+    criarCupom,
+    codigoDeCupom,
     emitirToken,
     cabecalhosDeSessao,
     definirAdmin,

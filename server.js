@@ -71,20 +71,35 @@ app.use(helmet({
         directives: {
             defaultSrc: ["'self'"],
             // As páginas usam <script> e style= inline, por isso o 'unsafe-inline'.
-            scriptSrc: ["'self'", "'unsafe-inline'"],
-            styleSrc: ["'self'", "'unsafe-inline'"],
+            //
+            // As entradas accounts.google.com/gsi são do botão "Entrar com
+            // Google", conforme a documentação do Google Identity Services. Sem
+            // qualquer uma delas o botão simplesmente não aparece, sem erro
+            // visível — só no console do navegador. São quatro, não duas:
+            // script, frame, connect (endpoints do GIS) e style (folha do botão).
+            scriptSrc: ["'self'", "'unsafe-inline'", 'https://accounts.google.com/gsi/client'],
+            styleSrc: ["'self'", "'unsafe-inline'", 'https://accounts.google.com/gsi/style'],
+            frameSrc: ['https://accounts.google.com/gsi/'],
             // Qualquer origem https. O catálogo é editável pelo painel, então
             // fixar uma lista de domínios faria as imagens de fornecedores novos
             // serem bloqueadas sem aviso. Só entram URLs cadastradas por um
             // administrador, e imagem não executa código.
             imgSrc: ["'self'", 'data:', 'https:'],
-            connectSrc: ["'self'"],
+            connectSrc: ["'self'", 'https://accounts.google.com/gsi/'],
             frameAncestors: ["'none'"],
             objectSrc: ["'none'"]
         }
     },
     // O checkout do Mercado Pago acontece por redirecionamento para outro domínio.
-    crossOriginOpenerPolicy: { policy: 'same-origin-allow-popups' }
+    // Também é o que o popup do login com Google exige.
+    crossOriginOpenerPolicy: { policy: 'same-origin-allow-popups' },
+    // O padrão do helmet é no-referrer, e o botão do Google precisa saber de
+    // qual origem está sendo usado. Valores da documentação do Google Identity
+    // Services: strict-origin-when-cross-origin em produção (HTTPS) e
+    // no-referrer-when-downgrade para testar em http://localhost.
+    referrerPolicy: {
+        policy: process.env.NODE_ENV === 'production' ? 'strict-origin-when-cross-origin' : 'no-referrer-when-downgrade'
+    }
 }));
 
 app.use(cors({
@@ -217,6 +232,19 @@ const limitadorCadastro = rateLimit({
     message: { mensagem: 'Muitas solicitações. Tente novamente mais tarde.' }
 });
 
+// Validação de cupom. Só conta tentativa com código que não existe — é assim
+// que se descobre cupom no chute. O carrinho revalida o cupom a cada mudança
+// de quantidade, e isso, com um código real, não gasta nada do limite.
+const limitadorCupom = rateLimit({
+    windowMs: 15 * 60 * 1000,
+    limit: 15,
+    standardHeaders: 'draft-7',
+    legacyHeaders: false,
+    skipSuccessfulRequests: true,
+    requestWasSuccessful: (req, res) => res.locals.cupomEncontrado === true,
+    message: { mensagem: 'Muitas tentativas de cupom. Tente novamente em alguns minutos.' }
+});
+
 function getBaseUrl(req) {
     if (process.env.APP_BASE_URL) {
         return process.env.APP_BASE_URL;
@@ -342,8 +370,216 @@ async function resolverItensCarrinho(itens, executor = pool) {
     return { ok: true, itens: resolvidos };
 }
 
-function calcularFrete(subtotal) {
-    return subtotal > 199 ? 0 : 19.9;
+// Frete fixo, sem faixa de frete grátis: a loja passou a dar desconto por
+// cupom, e o cupom mexe só nos produtos. public/script.js espelha este valor
+// para exibição (getShipping); mudou aqui, muda lá.
+const VALOR_FRETE = 19.9;
+
+function calcularFrete() {
+    return VALOR_FRETE;
+}
+
+// ---------------------------------------------------------------------------
+// Cupons de desconto
+// ---------------------------------------------------------------------------
+//
+// Mesma regra do preço: o carrinho manda só o código, e o desconto é
+// recalculado do zero no servidor em toda etapa. Nada que uma validação
+// anterior devolveu ao navegador é reaproveitado.
+//
+// Dinheiro em centavos inteiros: em ponto flutuante, somas e percentuais de
+// valores como 0,1 e 0,2 deixam resíduos que viram um centavo a mais ou a menos.
+
+function paraCentavos(valor) {
+    return Math.round(Number(valor) * 100);
+}
+
+function deCentavos(centavos) {
+    return centavos / 100;
+}
+
+function formatarReais(valor) {
+    return Number(valor).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
+}
+
+function normalizarCodigoCupom(codigo) {
+    return String(codigo === undefined || codigo === null ? '' : codigo).trim().toUpperCase();
+}
+
+// Checa na ordem da spec, com motivo específico em cada recusa: o carrinho
+// mostra a mensagem, e "cupom inválido" não diz à pessoa o que fazer.
+// `encontrado` alimenta o rate limit: só código inexistente conta tentativa.
+async function validarCupom(codigo, usuarioId, subtotal, executor = pool) {
+    const normalizado = normalizarCodigoCupom(codigo);
+
+    if (!normalizado) {
+        return { valido: false, encontrado: false, motivo: 'Informe o código do cupom.' };
+    }
+
+    // Validade comparada no banco: valido_de/valido_ate são TIMESTAMPTZ e NOW()
+    // é o mesmo relógio, sem depender do fuso do processo.
+    const resultado = await executor.query(
+        `SELECT c.id, c.codigo, c.tipo, c.valor, c.ativo, c.valor_minimo_pedido,
+                c.uso_maximo, c.uso_maximo_por_usuario,
+                c.valido_de IS NOT NULL AND c.valido_de > NOW() AS ainda_nao_vale,
+                c.valido_ate IS NOT NULL AND c.valido_ate < NOW() AS expirado,
+                (SELECT count(*) FROM cupom_usos u WHERE u.cupom_id = c.id)::int AS usos,
+                (SELECT count(*) FROM cupom_usos u WHERE u.cupom_id = c.id AND u.usuario_id = $2)::int AS usos_do_usuario
+           FROM cupons c
+          WHERE c.codigo = $1`,
+        [normalizado, usuarioId]
+    );
+
+    if (resultado.rowCount === 0) {
+        return { valido: false, encontrado: false, motivo: 'Cupom não encontrado.' };
+    }
+
+    const cupom = resultado.rows[0];
+    const recusa = (motivo) => ({ valido: false, encontrado: true, motivo });
+
+    if (!cupom.ativo) return recusa('Este cupom não está mais ativo.');
+    if (cupom.ainda_nao_vale) return recusa('Este cupom ainda não começou a valer.');
+    if (cupom.expirado) return recusa('Este cupom expirou.');
+
+    const subtotalCentavos = paraCentavos(subtotal);
+
+    if (subtotalCentavos < paraCentavos(cupom.valor_minimo_pedido)) {
+        return recusa(`Este cupom vale para pedidos a partir de ${formatarReais(cupom.valor_minimo_pedido)}.`);
+    }
+
+    if (cupom.uso_maximo !== null && cupom.usos >= cupom.uso_maximo) {
+        return recusa('Este cupom atingiu o limite de usos.');
+    }
+
+    if (cupom.usos_do_usuario >= cupom.uso_maximo_por_usuario) {
+        return recusa('Você já usou este cupom o número máximo de vezes.');
+    }
+
+    // Percentual sobre o subtotal; fixo limitado ao subtotal, para o total
+    // dos produtos nunca ficar negativo. O frete fica de fora dos dois.
+    const descontoCentavos = cupom.tipo === 'percentual'
+        ? Math.round((subtotalCentavos * Number(cupom.valor)) / 100)
+        : Math.min(paraCentavos(cupom.valor), subtotalCentavos);
+
+    return {
+        valido: true,
+        encontrado: true,
+        cupom: { id: cupom.id, codigo: cupom.codigo, tipo: cupom.tipo, valor: Number(cupom.valor) },
+        desconto: deCentavos(descontoCentavos)
+    };
+}
+
+// Monta o pedido a partir do corpo da requisição, do zero: itens e preços do
+// banco, desconto do cupom recalculado. /cupons/validar e /pagamentos/criar
+// passam os dois por aqui, então a prévia do carrinho e o valor cobrado são a
+// mesma conta. Desconto, total ou preço que venham no corpo nem são lidos.
+async function prepararCheckout(corpo, usuario) {
+    const resolucao = await resolverItensCarrinho(corpo && corpo.itens);
+
+    if (!resolucao.ok) {
+        return { ok: false, origem: 'carrinho', mensagem: resolucao.mensagem };
+    }
+
+    const subtotalCentavos = resolucao.itens.reduce(
+        (soma, item) => soma + paraCentavos(item.unit_price) * item.quantity,
+        0
+    );
+    const subtotal = deCentavos(subtotalCentavos);
+
+    let desconto = 0;
+    let cupom = null;
+    let cupomEncontrado = false;
+    const codigo = normalizarCodigoCupom(corpo && corpo.cupom);
+
+    if (codigo) {
+        const validacao = await validarCupom(codigo, usuario.id, subtotal);
+        cupomEncontrado = validacao.encontrado;
+
+        if (!validacao.valido) {
+            return { ok: false, origem: 'cupom', mensagem: validacao.motivo, cupomEncontrado };
+        }
+
+        desconto = validacao.desconto;
+        cupom = validacao.cupom;
+    }
+
+    // O cupom mexe só nos produtos, nunca no frete: um cupom de 100% ainda
+    // deixa o frete a pagar.
+    const frete = calcularFrete();
+    const total = deCentavos(subtotalCentavos - paraCentavos(desconto) + paraCentavos(frete));
+
+    // Com frete fixo o total nunca chega a zero; a guarda fica para o dia em
+    // que o frete puder ser zero de novo. O Mercado Pago não cobra zero.
+    if (total <= 0) {
+        return {
+            ok: false,
+            origem: 'cupom',
+            mensagem: 'Este cupom cobre o pedido inteiro, e o Mercado Pago não processa pagamento de valor zero.',
+            cupomEncontrado
+        };
+    }
+
+    return { ok: true, itens: resolucao.itens, subtotal, desconto, frete, total, cupom, cupomEncontrado };
+}
+
+// O Mercado Pago não aceita item de preço negativo, então o desconto não entra
+// como linha própria. Com cupom, os produtos seguem num item só, já com o
+// desconto; sem cupom, um item por produto, como sempre foi. Nos dois casos a
+// soma dos itens é exatamente o total gravado no pedido.
+function montarItensMercadoPago({ itens, subtotal, desconto, frete, cupom }) {
+    let linhas;
+
+    if (desconto > 0) {
+        const unidades = itens.reduce((soma, item) => soma + item.quantity, 0);
+        const produtosComDesconto = deCentavos(paraCentavos(subtotal) - paraCentavos(desconto));
+
+        linhas = produtosComDesconto > 0
+            ? [{
+                title: `Pedido Petabyte: ${unidades} item(ns), cupom ${cupom.codigo}`,
+                quantity: 1,
+                currency_id: 'BRL',
+                unit_price: produtosComDesconto
+            }]
+            : [];
+    } else {
+        // produtoId é de uso interno; a API do Mercado Pago não o conhece.
+        linhas = itens.map(({ produtoId, ...item }) => item);
+    }
+
+    if (frete > 0) {
+        linhas.push({ title: 'Frete', quantity: 1, currency_id: 'BRL', unit_price: Number(frete.toFixed(2)) });
+    }
+
+    return linhas;
+}
+
+// Conta o uso na aprovação do pagamento, dentro da transação que já protege a
+// baixa de estoque. O limite foi conferido na criação do pedido, mas dois
+// pedidos abertos podem disputar a última vaga; o pagamento já foi aprovado
+// aqui, então o uso é gravado e o excesso vai para o log, como o estoque.
+async function contabilizarUsoCupom(cliente, pedido) {
+    await cliente.query(
+        'INSERT INTO cupom_usos (cupom_id, usuario_id, pedido_id) VALUES ($1, $2, $3) ON CONFLICT (pedido_id) DO NOTHING',
+        [pedido.cupom_id, pedido.usuario_id, pedido.id]
+    );
+    await cliente.query('UPDATE pedidos SET cupom_contabilizado = TRUE WHERE id = $1', [pedido.id]);
+
+    const situacao = await cliente.query(
+        `SELECT c.codigo, c.uso_maximo, c.uso_maximo_por_usuario,
+                (SELECT count(*) FROM cupom_usos u WHERE u.cupom_id = c.id)::int AS usos,
+                (SELECT count(*) FROM cupom_usos u WHERE u.cupom_id = c.id AND u.usuario_id = $2)::int AS usos_do_usuario
+           FROM cupons c WHERE c.id = $1`,
+        [pedido.cupom_id, pedido.usuario_id]
+    );
+
+    const cupom = situacao.rows[0];
+    if (cupom && ((cupom.uso_maximo !== null && cupom.usos > cupom.uso_maximo)
+        || cupom.usos_do_usuario > cupom.uso_maximo_por_usuario)) {
+        console.warn(
+            `[CUPOM] Pedido ${pedido.id}: o cupom ${cupom.codigo} passou do limite de uso ` +
+            `(${cupom.usos} no total, ${cupom.usos_do_usuario} deste cliente). O pagamento já foi aprovado; revisar manualmente.`
+        );
+    }
 }
 
 async function expirarPedidosPendentes(usuarioId = null) {
@@ -459,7 +695,7 @@ function obterPaymentIdDaRequisicao(req) {
     return null;
 }
 
-async function registrarPedidoPendente(usuario, itens, subtotal, frete, total) {
+async function registrarPedidoPendente(usuario, itens, subtotal, frete, total, { cupomId = null, desconto = 0 } = {}) {
     const client = await pool.connect();
 
     try {
@@ -486,9 +722,11 @@ async function registrarPedidoPendente(usuario, itens, subtotal, frete, total) {
                 subtotal,
                 frete,
                 total,
-                moeda
-            ) VALUES ($1, $2, $3, $4, $5, $6, CURRENT_TIMESTAMP + INTERVAL '1 minute', $7, $8, $9, $10) RETURNING id`,
-            [usuario.id, historicoId, externalReference, null, 'Aguardando pagamento', 'pending', subtotal, frete, total, 'BRL']
+                moeda,
+                cupom_id,
+                desconto
+            ) VALUES ($1, $2, $3, $4, $5, $6, CURRENT_TIMESTAMP + INTERVAL '1 minute', $7, $8, $9, $10, $11, $12) RETURNING id`,
+            [usuario.id, historicoId, externalReference, null, 'Aguardando pagamento', 'pending', subtotal, frete, total, 'BRL', cupomId, desconto]
         );
 
         const pedidoId = pedidoResult.rows[0].id;
@@ -532,7 +770,7 @@ async function sincronizarPagamentoNoBanco(pagamento) {
         // FOR UPDATE serializa /pagamentos/confirmar e o webhook, que podem
         // processar o mesmo pagamento simultaneamente.
         const pedidoResult = await client.query(
-            'SELECT id, usuario_id, expira_em, estoque_baixado FROM pedidos WHERE historico_id = $1 LIMIT 1 FOR UPDATE',
+            'SELECT id, usuario_id, expira_em, estoque_baixado, cupom_id, cupom_contabilizado FROM pedidos WHERE historico_id = $1 LIMIT 1 FOR UPDATE',
             [historicoId]
         );
 
@@ -599,6 +837,19 @@ async function sincronizarPagamentoNoBanco(pagamento) {
 
                 await client.query('UPDATE pedidos SET estoque_baixado = FALSE WHERE id = $1', [pedido.id]);
                 console.log(`[ESTOQUE] Pedido ${pedido.id}: estoque devolvido após status "${pagamento.status}".`);
+            }
+
+            // O cupom segue a mesma trava do estoque: conta uma vez, na primeira
+            // aprovação, e devolve a vaga no estorno. Carrinho abandonado com
+            // cupom aplicado nunca chega aqui, então não consome uso.
+            if (aprovado && pedido.cupom_id && !pedido.cupom_contabilizado) {
+                await contabilizarUsoCupom(client, pedido);
+            }
+
+            if (devolveEstoque && pedido.cupom_contabilizado) {
+                await client.query('DELETE FROM cupom_usos WHERE pedido_id = $1', [pedido.id]);
+                await client.query('UPDATE pedidos SET cupom_contabilizado = FALSE WHERE id = $1', [pedido.id]);
+                console.log(`[CUPOM] Pedido ${pedido.id}: vaga de uso devolvida após status "${pagamento.status}".`);
             }
 
             await client.query(
@@ -745,10 +996,13 @@ const METODOS_SEGUROS = new Set(['GET', 'HEAD', 'OPTIONS']);
 // que nunca teve cookie.
 const ROTAS_SEM_CSRF = new Set([
     '/auth/login',
+    '/auth/google',
     '/auth/cadastro',
     '/usuarios',
     '/auth/recuperar-senha',
     '/auth/redefinir-senha',
+    '/auth/verificar-email',
+    '/auth/reenviar-verificacao',
     '/pagamentos/webhook'
 ]);
 
@@ -1165,25 +1419,24 @@ async function criarTokenRecuperacao(usuarioId) {
     return token;
 }
 
-async function enviarEmailRecuperacao(email, token) {
-    const baseUrl = process.env.APP_BASE_URL || `http://localhost:${PORT}`;
-    const resetUrl = `${baseUrl}/redefinir-senha.html?token=${token}`;
-
+// Envia um e-mail pelas configurações SMTP disponíveis, tentando a próxima se
+// uma falhar. Nunca lança: devolve { ok, motivo } para quem chamou decidir. O
+// destinatário não vai para o log — em recuperação e confirmação, a simples
+// presença dele revelaria quais e-mails têm cadastro.
+async function enviarEmail({ para, assunto, html, rotulo }) {
     try {
         const transportadores = criarTransportadoresFallbackEmail();
 
-        // Sem o e-mail no log: ele só chega aqui quando a conta existe, então
-        // registrá-lo revelaria quais e-mails têm cadastro.
         if (transportadores.length === 0) {
-            console.log('[RESET] SMTP não configurado; e-mail de recuperação não enviado.');
-            return { ok: false, motivo: 'SMTP não configurado', resetUrl };
+            console.log(`[${rotulo}] SMTP não configurado; e-mail não enviado.`);
+            return { ok: false, motivo: 'SMTP não configurado' };
         }
 
         const mensagem = {
             from: process.env.SMTP_FROM || 'petabyte@local.dev',
-            to: email,
-            subject: 'Redefinição de senha Petabyte',
-            html: `<p>Olá!</p><p>Use o link abaixo para redefinir sua senha:</p><p><a href="${resetUrl}">${resetUrl}</a></p>`
+            to: para,
+            subject: assunto,
+            html
         };
 
         let ultimoErro = null;
@@ -1192,27 +1445,72 @@ async function enviarEmailRecuperacao(email, token) {
             try {
                 await transportador.verify();
                 await transportador.sendMail(mensagem);
-                console.log(`[RESET] E-mail enviado usando a configuração SMTP #${indice + 1}`);
+                console.log(`[${rotulo}] E-mail enviado usando a configuração SMTP #${indice + 1}`);
                 return { ok: true };
             } catch (erro) {
                 ultimoErro = erro;
                 console.error(
-                    `[RESET] Falha na configuração SMTP #${indice + 1}:`,
+                    `[${rotulo}] Falha na configuração SMTP #${indice + 1}:`,
                     erro && erro.message ? erro.message : String(erro)
                 );
             }
         }
 
-        return {
-            ok: false,
-            motivo: ultimoErro && ultimoErro.message ? ultimoErro.message : 'Falha desconhecida no SMTP',
-            resetUrl
-        };
+        return { ok: false, motivo: ultimoErro && ultimoErro.message ? ultimoErro.message : 'Falha desconhecida no SMTP' };
     } catch (erro) {
         const mensagemErro = erro && erro.message ? erro.message : String(erro);
-        console.error('[RESET] Falha ao enviar e-mail:', mensagemErro);
-        return { ok: false, motivo: mensagemErro, resetUrl };
+        console.error(`[${rotulo}] Falha ao enviar e-mail:`, mensagemErro);
+        return { ok: false, motivo: mensagemErro };
     }
+}
+
+function urlDoSite(caminho) {
+    const baseUrl = process.env.APP_BASE_URL || `http://localhost:${PORT}`;
+    return `${baseUrl}${caminho}`;
+}
+
+function enviarEmailRecuperacao(email, token) {
+    const link = urlDoSite(`/redefinir-senha.html?token=${token}`);
+
+    return enviarEmail({
+        para: email,
+        assunto: 'Redefinição de senha Petabyte',
+        html: `<p>Olá!</p><p>Use o link abaixo para redefinir sua senha:</p><p><a href="${link}">${link}</a></p>`,
+        rotulo: 'RESET'
+    });
+}
+
+function enviarEmailVerificacao(email, token) {
+    const link = urlDoSite(`/verificar-email.html?token=${token}`);
+
+    return enviarEmail({
+        para: email,
+        assunto: 'Confirme seu e-mail na Petabyte',
+        html: `<p>Olá!</p>
+            <p>Para ativar sua conta na Petabyte, confirme seu e-mail pelo link abaixo. Ele vale por 24 horas.</p>
+            <p><a href="${link}">${link}</a></p>
+            <p>Se não foi você que criou esta conta, ignore este e-mail: sem a confirmação, ninguém entra nela.</p>`,
+        rotulo: 'VERIFICACAO'
+    });
+}
+
+// Gera o token de confirmação e grava só o hash, como a recuperação de senha.
+// Invalida os pendentes da pessoa antes: só o link mais recente vale, para um
+// e-mail antigo esquecido na caixa não continuar servindo.
+async function criarTokenVerificacao(cliente, usuarioId) {
+    const token = crypto.randomBytes(32).toString('hex');
+
+    await cliente.query(
+        'UPDATE verificacoes_email SET usado_em = NOW() WHERE usuario_id = $1 AND usado_em IS NULL',
+        [usuarioId]
+    );
+    await cliente.query(
+        `INSERT INTO verificacoes_email (usuario_id, token_hash, expira_em)
+         VALUES ($1, $2, NOW() + INTERVAL '24 hours')`,
+        [usuarioId, hashToken(token)]
+    );
+
+    return token;
 }
 
 async function inicializarBanco() {
@@ -1354,7 +1652,10 @@ module.exports = {
     mapearStatusPagamento,
     registrarPedidoPendente,
     sincronizarPagamentoNoBanco,
-    criarTokenRecuperacao
+    criarTokenRecuperacao,
+    validarCupom,
+    prepararCheckout,
+    montarItensMercadoPago
 };
 
 app.get('/health', (req, res) => {
@@ -1367,7 +1668,10 @@ app.get('/config', (req, res) => {
     res.json({
         checkoutHabilitado: CHECKOUT_HABILITADO,
         mensagemCheckoutDesativado: 'Esta é uma vitrine de demonstração. '
-            + 'Você pode navegar, montar o carrinho e explorar o catálogo, mas a finalização de compra está desativada.'
+            + 'Você pode navegar, montar o carrinho e explorar o catálogo, mas a finalização de compra está desativada.',
+        // O Client ID do Google não é segredo: vai para o navegador de qualquer
+        // jeito, no próprio botão. Nulo esconde o botão na tela de login.
+        googleClientId: process.env.GOOGLE_CLIENT_ID || null
     });
 });
 
@@ -1378,8 +1682,102 @@ if (process.env.NODE_ENV !== 'production') {
     });
 }
 
+// ---------------------------------------------------------------------------
+// Cadastro: e-mail e senha
+// ---------------------------------------------------------------------------
+
+// Só provedores de e-mail conhecidos. Serviços de e-mail temporário criam
+// endereços descartáveis aos milhares, e com eles uma pessoa abriria contas
+// novas sem fim — para repetir cupom de "uma vez por cliente", por exemplo.
+// Uma lista do que é aceito é mais segura que uma lista do que é proibido: os
+// descartáveis surgem todo dia, os provedores grandes não. Para aceitar mais
+// um, é só acrescentar aqui. Não vale para o login com Google: o e-mail já foi
+// confirmado pela própria Google, e serviço temporário não cria conta Google.
+const DOMINIOS_EMAIL_PERMITIDOS = new Set([
+    // Google
+    'gmail.com', 'googlemail.com',
+    // Microsoft
+    'outlook.com', 'outlook.com.br', 'hotmail.com', 'hotmail.com.br', 'live.com', 'msn.com',
+    // Yahoo
+    'yahoo.com', 'yahoo.com.br', 'ymail.com', 'rocketmail.com',
+    // Apple
+    'icloud.com', 'me.com', 'mac.com',
+    // Outros internacionais
+    'aol.com', 'proton.me', 'protonmail.com',
+    // Brasileiros
+    'uol.com.br', 'bol.com.br', 'terra.com.br', 'ig.com.br'
+]);
+
+// E-mail é gravado em minúsculas; o login compara ignorando maiúsculas, porque
+// contas antigas foram gravadas como a pessoa digitou.
+function normalizarEmail(email) {
+    return String(email === undefined || email === null ? '' : email).trim().toLowerCase();
+}
+
+function validarEmailDeCadastro(email) {
+    const normalizado = normalizarEmail(email);
+
+    if (normalizado.length > 254 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalizado)) {
+        return { ok: false, mensagem: 'Informe um e-mail válido.' };
+    }
+
+    const dominio = normalizado.split('@')[1];
+
+    if (!DOMINIOS_EMAIL_PERMITIDOS.has(dominio)) {
+        return {
+            ok: false,
+            mensagem: 'Use um e-mail de um provedor conhecido, como Gmail, Outlook, Hotmail, Yahoo, iCloud, '
+                + 'UOL, BOL ou Terra. Endereços temporários não são aceitos.'
+        };
+    }
+
+    return { ok: true, email: normalizado };
+}
+
+// Senhas que aparecem no topo de todo vazamento. Lista curta de propósito: o
+// que protege de verdade é o comprimento; isto só barra o óbvio.
+const SENHAS_COMUNS = new Set([
+    '12345678', '123456789', '1234567890', '87654321', '11111111', '00000000',
+    'senha123', 'senha1234', 'senha12345', 'mudar123', 'password1', 'password123',
+    'qwerty123', 'abc12345', 'abcd1234', 'a1b2c3d4', 'iloveyou1', 'admin123',
+    'petabyte1', 'petabyte123', 'brasil123', 'teste123'
+]);
+
+// A mesma regra no cadastro, na troca e na redefinição de senha: uma regra só,
+// para ninguém criar pela porta dos fundos a senha que a da frente recusa.
+// Devolve a mensagem do problema, ou null se a senha serve.
+function validarForcaSenha(senha, email) {
+    const texto = String(senha === undefined || senha === null ? '' : senha);
+
+    if (texto.length < 8) {
+        return 'A senha precisa ter pelo menos 8 caracteres.';
+    }
+
+    // O bcrypt ignora tudo depois de 72 bytes: acima disso, o final da senha
+    // não protegeria nada.
+    if (Buffer.byteLength(texto, 'utf8') > 72) {
+        return 'A senha pode ter no máximo 72 caracteres.';
+    }
+
+    if (!/\p{L}/u.test(texto) || !/\d/.test(texto)) {
+        return 'A senha precisa ter letras e números.';
+    }
+
+    if (SENHAS_COMUNS.has(texto.toLowerCase())) {
+        return 'Esta senha é comum demais. Escolha outra.';
+    }
+
+    const usuarioDoEmail = normalizarEmail(email).split('@')[0];
+    if (usuarioDoEmail.length >= 4 && texto.toLowerCase().includes(usuarioDoEmail)) {
+        return 'A senha não pode conter o seu e-mail.';
+    }
+
+    return null;
+}
+
 app.post('/usuarios', limitadorCadastro, async (req, res) => {
-    const { nome, email, senha } = req.body;
+    const { nome, senha } = req.body;
+    const email = normalizarEmail(req.body.email);
 
     if (!nome || !email) {
         return res.status(400).json({ mensagem: 'Nome e e-mail são obrigatórios.' });
@@ -1391,15 +1789,30 @@ app.post('/usuarios', limitadorCadastro, async (req, res) => {
         // diferente de /auth/cadastro, que devolve 409 porque ali a pessoa
         // precisa saber que deve entrar em vez de cadastrar. Sem esta checagem
         // o INSERT batia na UNIQUE e caía no 500 genérico abaixo.
-        const existente = await pool.query('SELECT id FROM usuarios WHERE email = $1', [email]);
+        const existente = await pool.query('SELECT id FROM usuarios WHERE lower(email) = $1', [email]);
 
         if (existente.rowCount > 0) {
             return res.status(200).json({ mensagem: 'Usuário salvo com sucesso!' });
         }
 
-        // Cadastro de newsletter não define senha. Usamos um valor aleatório
-        // descartado em seguida para que a conta não seja acessível por login
-        // até que o usuário use o fluxo de recuperação de senha.
+        // Daqui para baixo nasce uma conta: vale a mesma lista de provedores
+        // do cadastro. (Quem já tem conta passou acima, sem essa checagem.)
+        const validacaoEmail = validarEmailDeCadastro(email);
+        if (!validacaoEmail.ok) {
+            return res.status(400).json({ mensagem: validacaoEmail.mensagem });
+        }
+
+        // Sem senha, um valor aleatório descartado: a conta existe para a
+        // newsletter e não abre por login. Com senha (só pela API), vale a
+        // mesma regra do cadastro — sem isto, esta rota seria um jeito de
+        // criar conta com senha fraca.
+        if (senha) {
+            const problema = validarForcaSenha(senha, email);
+            if (problema) {
+                return res.status(400).json({ mensagem: problema });
+            }
+        }
+
         const senhaParaHash = senha || crypto.randomBytes(32).toString('hex');
         const senhaHash = await bcrypt.hash(senhaParaHash, 10);
         const resultado = await pool.query('INSERT INTO usuarios (nome, email, senha) VALUES ($1, $2, $3) RETURNING id', [nome, email, senhaHash]);
@@ -1412,55 +1825,219 @@ app.post('/usuarios', limitadorCadastro, async (req, res) => {
     }
 });
 
+// Cria a conta sem abrir sessão: ela só entra depois de confirmar o e-mail
+// pelo link. Confirmar prova que a pessoa controla o endereço — sem isso,
+// qualquer um cadastrava o e-mail de outra pessoa.
 app.post('/auth/cadastro', limitadorCadastro, async (req, res) => {
-    const { nome, email, senha } = req.body;
+    const nome = String((req.body && req.body.nome) || '').trim();
+    const { senha } = req.body;
 
-    if (!nome || !email || !senha) {
+    if (!nome || !req.body.email || !senha) {
         return res.status(400).json({ mensagem: 'Nome, e-mail e senha são obrigatórios.' });
     }
 
+    if (nome.length < 2 || nome.length > 100) {
+        return res.status(400).json({ mensagem: 'O nome precisa ter entre 2 e 100 caracteres.' });
+    }
+
+    const validacaoEmail = validarEmailDeCadastro(req.body.email);
+    if (!validacaoEmail.ok) {
+        return res.status(400).json({ mensagem: validacaoEmail.mensagem });
+    }
+
+    const { email } = validacaoEmail;
+    const problemaSenha = validarForcaSenha(senha, email);
+    if (problemaSenha) {
+        return res.status(400).json({ mensagem: problemaSenha });
+    }
+
+    let usuario;
+    let token;
+    const cliente = await pool.connect();
+
     try {
-        const existente = await pool.query('SELECT id FROM usuarios WHERE email = $1', [email]);
+        const existente = await cliente.query('SELECT id FROM usuarios WHERE lower(email) = $1', [email]);
         if (existente.rowCount > 0) {
-            return res.status(409).json({ mensagem: 'Este e-mail já está cadastrado.' });
+            // Se o e-mail é da pessoa e ela não criou esta conta, "Esqueci
+            // minha senha" prova que ela controla o endereço e toma a conta.
+            return res.status(409).json({
+                mensagem: 'Este e-mail já está cadastrado. Se ele é seu, entre ou use "Esqueci minha senha".'
+            });
         }
 
-        const senhaHash = await bcrypt.hash(senha, 10);
+        await cliente.query('BEGIN');
+
+        const resultado = await cliente.query(
+            `INSERT INTO usuarios (nome, email, senha, email_verificado)
+             VALUES ($1, $2, $3, FALSE)
+             RETURNING id, nome, email`,
+            [nome, email, await bcrypt.hash(senha, 10)]
+        );
+        usuario = resultado.rows[0];
+
+        await cliente.query(
+            'INSERT INTO historico_compras (usuario_id, pedido, status) VALUES ($1, $2, $3)',
+            [usuario.id, 'Pedido de boas-vindas', 'Em transporte']
+        );
+        token = await criarTokenVerificacao(cliente, usuario.id);
+
+        await cliente.query('COMMIT');
+    } catch (erro) {
+        await cliente.query('ROLLBACK').catch(() => {});
+        console.error('Erro ao cadastrar usuário:', erro);
+        return res.status(500).json({ mensagem: 'Erro ao criar conta.' });
+    } finally {
+        cliente.release();
+    }
+
+    const envio = await enviarEmailVerificacao(email, token);
+
+    // Sem o e-mail, a conta nunca poderia ser confirmada — e ainda ocuparia o
+    // endereço. Desfaz, para a pessoa tentar de novo do zero.
+    if (!envio.ok) {
+        await pool.query('DELETE FROM usuarios WHERE id = $1', [usuario.id]).catch(() => {});
+        return res.status(502).json({
+            mensagem: 'Não foi possível enviar o e-mail de confirmação agora. Tente novamente em alguns minutos.'
+        });
+    }
+
+    return res.status(201).json({
+        mensagem: `Conta criada! Enviamos um link de confirmação para ${email}. Confirme o e-mail para entrar.`,
+        email
+    });
+});
+
+// Confirma o e-mail pelo token do link. POST, e não GET no próprio link: o
+// link abre uma página que chama esta rota, porque leitores de e-mail e
+// antivírus visitam links sozinhos, e um GET consumiria o token sem a pessoa.
+app.post('/auth/verificar-email', limitadorCadastro, async (req, res) => {
+    const token = req.body && req.body.token;
+
+    if (typeof token !== 'string' || !token) {
+        return res.status(400).json({ mensagem: 'Link de confirmação inválido.' });
+    }
+
+    try {
+        // Prazo comparado no banco, com o mesmo relógio que o gravou.
+        const achado = await pool.query(
+            `SELECT id, usuario_id, usado_em IS NOT NULL AS usado, expira_em <= NOW() AS expirado
+               FROM verificacoes_email WHERE token_hash = $1`,
+            [hashToken(token)]
+        );
+
+        if (achado.rowCount === 0 || achado.rows[0].usado) {
+            return res.status(400).json({
+                mensagem: 'Este link não vale mais. Se a conta ainda não foi confirmada, entre com seu e-mail e senha para receber outro.'
+            });
+        }
+
+        if (achado.rows[0].expirado) {
+            return res.status(400).json({
+                mensagem: 'Este link expirou. Entre com seu e-mail e senha para receber outro.'
+            });
+        }
+
+        const { usuario_id: usuarioId } = achado.rows[0];
+        await pool.query('UPDATE usuarios SET email_verificado = TRUE WHERE id = $1', [usuarioId]);
+        await pool.query(
+            'UPDATE verificacoes_email SET usado_em = NOW() WHERE usuario_id = $1 AND usado_em IS NULL',
+            [usuarioId]
+        );
+
+        return res.json({ mensagem: 'E-mail confirmado! Agora é só entrar com seu e-mail e senha.' });
+    } catch (erro) {
+        console.error('Erro ao confirmar e-mail:', erro);
+        return res.status(500).json({ mensagem: 'Não foi possível confirmar o e-mail.' });
+    }
+});
+
+// Reenvia a confirmação. Exige a senha: assim só quem criou a conta pede o
+// reenvio, e a rota não vira um jeito de disparar e-mails para qualquer um.
+app.post('/auth/reenviar-verificacao', limitadorSenha, async (req, res) => {
+    const email = normalizarEmail(req.body && req.body.email);
+    const senha = String((req.body && req.body.senha) || '');
+
+    if (!email || !senha) {
+        return res.status(400).json({ mensagem: 'Informe e-mail e senha.' });
+    }
+
+    try {
         const resultado = await pool.query(
-            'INSERT INTO usuarios (nome, email, senha) VALUES ($1, $2, $3) RETURNING id, nome, email',
-            [nome, email, senhaHash]
+            `SELECT id, email, senha, email_verificado FROM usuarios
+              WHERE lower(email) = $1 ORDER BY (email = $1) DESC LIMIT 1`,
+            [email]
         );
         const usuario = resultado.rows[0];
-        await pool.query('INSERT INTO historico_compras (usuario_id, pedido, status) VALUES ($1, $2, $3)', [usuario.id, 'Pedido de boas-vindas', 'Em transporte']);
 
-        // Quem acabou de criar a conta já sai logado.
-        await iniciarSessao(res, usuario);
-        res.status(201).json({ mensagem: 'Conta criada com sucesso!', usuario });
+        if (!usuario || usuario.senha === null || !(await bcrypt.compare(senha, usuario.senha))) {
+            return res.status(401).json({ mensagem: 'E-mail ou senha inválidos.' });
+        }
+
+        if (usuario.email_verificado) {
+            return res.json({ mensagem: 'Seu e-mail já está confirmado. Pode entrar.' });
+        }
+
+        const token = await criarTokenVerificacao(pool, usuario.id);
+        const envio = await enviarEmailVerificacao(usuario.email, token);
+
+        if (!envio.ok) {
+            return res.status(502).json({ mensagem: 'Não foi possível enviar o e-mail agora. Tente novamente em alguns minutos.' });
+        }
+
+        return res.json({ mensagem: `Enviamos um novo link de confirmação para ${usuario.email}.` });
     } catch (erro) {
-        console.error('Erro ao cadastrar usuário:', erro);
-        res.status(500).json({ mensagem: 'Erro ao criar conta.' });
+        console.error('Erro ao reenviar confirmação:', erro);
+        return res.status(500).json({ mensagem: 'Não foi possível reenviar a confirmação.' });
     }
 });
 
 app.post('/auth/login', limitadorLogin, async (req, res) => {
-    const { email, senha } = req.body;
+    const { senha } = req.body;
+    const email = normalizarEmail(req.body.email);
 
     if (!email || !senha) {
         return res.status(400).json({ mensagem: 'E-mail e senha são obrigatórios.' });
     }
 
     try {
-        const resultado = await pool.query('SELECT id, nome, email, senha FROM usuarios WHERE email = $1', [email]);
+        // Sem diferenciar maiúsculas: contas novas gravam o e-mail em minúsculas,
+        // as antigas como a pessoa digitou. Havendo duas, a de grafia exata vence.
+        const resultado = await pool.query(
+            `SELECT id, nome, email, senha, email_verificado FROM usuarios
+              WHERE lower(email) = $1 ORDER BY (email = $1) DESC LIMIT 1`,
+            [email]
+        );
 
         if (resultado.rowCount === 0) {
             return res.status(401).json({ mensagem: 'E-mail ou senha inválidos.' });
         }
 
         const usuario = resultado.rows[0];
+
+        // Conta criada pelo Google ainda sem senha. Comparar com bcrypt contra
+        // NULL lança exceção e viraria um 500; a pessoa precisa saber o caminho.
+        if (usuario.senha === null) {
+            return res.status(401).json({
+                mensagem: 'Esta conta entra com o Google. Use o botão "Entrar com Google" '
+                    + 'ou crie uma senha em "Esqueci minha senha".'
+            });
+        }
+
         const senhaValida = await bcrypt.compare(senha, usuario.senha);
 
         if (!senhaValida) {
             return res.status(401).json({ mensagem: 'E-mail ou senha inválidos.' });
+        }
+
+        // Depois da senha, nunca antes: assim ninguém descobre se uma conta
+        // está confirmada sem saber a senha dela. O código deixa a tela de
+        // login oferecer o reenvio do link.
+        if (!usuario.email_verificado) {
+            return res.status(403).json({
+                codigo: 'email_nao_verificado',
+                mensagem: 'Confirme seu e-mail para entrar. Procure o link que enviamos para '
+                    + `${usuario.email} (veja também o spam).`
+            });
         }
 
         // O token vai nos cookies, não no corpo: o JavaScript da página não
@@ -1602,10 +2179,224 @@ app.post('/auth/logout', async (req, res) => {
     return res.json({ mensagem: 'Sessão encerrada.' });
 });
 
+// Campos da conta devolvidos por GET e PUT /auth/me. Do Google e da senha só
+// saem os indicadores — nunca o google_id nem o hash —, o bastante para a
+// central da conta decidir que formulário mostrar.
+const CAMPOS_USUARIO_CONTA = `id, nome, email, admin, criado_em,
+    google_id IS NOT NULL AS "googleConectado",
+    senha IS NOT NULL AS "temSenha"`;
+
+// ---------------------------------------------------------------------------
+// Login com Google
+// ---------------------------------------------------------------------------
+
+const URL_TOKENINFO_GOOGLE = 'https://oauth2.googleapis.com/tokeninfo';
+const EMISSORES_GOOGLE = ['accounts.google.com', 'https://accounts.google.com'];
+
+// Confere a credencial direto na Google, sem biblioteca: o endpoint público
+// valida assinatura e expiração, e aqui se confere o resto. Mesmo raciocínio
+// do webhook do Mercado Pago — nada que chega do navegador vale sem reconferir
+// na fonte. O token nunca vai para o log.
+async function verificarCredencialGoogle(credential) {
+    const clientId = process.env.GOOGLE_CLIENT_ID;
+
+    if (!clientId) {
+        return { ok: false, status: 503, mensagem: 'O login com Google não está configurado nesta instalação.' };
+    }
+
+    if (typeof credential !== 'string' || credential.length < 20 || credential.length > 4096) {
+        return { ok: false, status: 400, mensagem: 'Credencial do Google ausente ou inválida.' };
+    }
+
+    let resposta;
+    try {
+        resposta = await fetch(`${URL_TOKENINFO_GOOGLE}?id_token=${encodeURIComponent(credential)}`, {
+            signal: AbortSignal.timeout(5000)
+        });
+    } catch (erro) {
+        console.error('[GOOGLE] Falha ao consultar o tokeninfo:', erro && erro.message ? erro.message : erro);
+        return { ok: false, status: 502, mensagem: 'Não foi possível falar com o Google agora. Tente novamente.' };
+    }
+
+    const invalida = { ok: false, status: 401, mensagem: 'Credencial do Google inválida ou expirada.' };
+
+    if (!resposta.ok) return invalida;
+
+    const info = await resposta.json().catch(() => null);
+    if (!info) return invalida;
+
+    // Emitido para ESTE aplicativo: um token válido de outro site com login
+    // Google não pode abrir sessão aqui.
+    if (info.aud !== clientId) {
+        return { ok: false, status: 401, mensagem: 'Credencial do Google emitida para outro aplicativo.' };
+    }
+
+    if (!EMISSORES_GOOGLE.includes(info.iss) || !(Number(info.exp) * 1000 > Date.now())) {
+        return invalida;
+    }
+
+    // O vínculo automático por e-mail só é seguro porque a Google confirmou
+    // que a pessoa controla esse endereço. O tokeninfo devolve texto.
+    if (info.email_verified !== 'true' && info.email_verified !== true) {
+        return { ok: false, status: 401, mensagem: 'O Google não confirmou este e-mail. Use outra forma de entrar.' };
+    }
+
+    if (!info.sub || !info.email) return invalida;
+
+    const email = String(info.email).trim();
+    const nome = String(info.name || info.given_name || email.split('@')[0]).trim().slice(0, 100);
+
+    return { ok: true, googleId: String(info.sub), email, nome };
+}
+
+// Cria a conta na primeira vez e entra nas seguintes. Depois daqui a sessão é
+// idêntica à de quem entra com senha: autenticarToken e exigirAdmin não sabem
+// nem precisam saber como a pessoa entrou.
+app.post('/auth/google', limitadorLogin, async (req, res) => {
+    const verificacao = await verificarCredencialGoogle(req.body && req.body.credential);
+
+    if (!verificacao.ok) {
+        return res.status(verificacao.status).json({ mensagem: verificacao.mensagem });
+    }
+
+    const { googleId, email, nome } = verificacao;
+    const cliente = await pool.connect();
+    let usuario;
+    let criada = false;
+
+    try {
+        await cliente.query('BEGIN');
+
+        // 1. Já vinculada: o sub é estável, mesmo que o e-mail mude na Google.
+        const porGoogle = await cliente.query('SELECT id, nome, email FROM usuarios WHERE google_id = $1', [googleId]);
+
+        if (porGoogle.rowCount > 0) {
+            usuario = porGoogle.rows[0];
+        } else {
+            // 2. Mesmo e-mail, já verificado pela Google: vincula. A comparação
+            // ignora maiúsculas porque contas antigas gravaram o e-mail como a
+            // pessoa digitou.
+            const porEmail = await cliente.query(
+                `SELECT id, nome, email, google_id, email_verificado FROM usuarios
+                  WHERE lower(email) = lower($1)
+                  ORDER BY (email = $1) DESC
+                  LIMIT 1
+                  FOR UPDATE`,
+                [email]
+            );
+
+            if (porEmail.rowCount > 0) {
+                const existente = porEmail.rows[0];
+
+                // Já ligada a OUTRA conta Google (outro sub com o mesmo e-mail).
+                // Trocar em silêncio entregaria a conta a quem chegou por último.
+                if (existente.google_id) {
+                    await cliente.query('ROLLBACK');
+                    return res.status(409).json({
+                        mensagem: 'Este e-mail já está conectado a outra conta Google. Entre com e-mail e senha.'
+                    });
+                }
+
+                if (existente.email_verificado) {
+                    await cliente.query('UPDATE usuarios SET google_id = $1 WHERE id = $2', [googleId, existente.id]);
+                } else {
+                    // Conta com e-mail nunca confirmado: a senha dela foi
+                    // definida por alguém que não provou ser dono do endereço —
+                    // talvez outra pessoa, cadastrando o e-mail alheio de
+                    // antemão. Quem prova agora é a Google: a senha antiga é
+                    // desativada e tudo que ela abriu cai. A dona define outra
+                    // senha em Minha conta, se quiser.
+                    await cliente.query(
+                        'UPDATE usuarios SET google_id = $1, email_verificado = TRUE, senha = NULL WHERE id = $2',
+                        [googleId, existente.id]
+                    );
+                    await cliente.query(
+                        'UPDATE verificacoes_email SET usado_em = NOW() WHERE usuario_id = $1 AND usado_em IS NULL',
+                        [existente.id]
+                    );
+                    await revogarSessoesDoUsuario(cliente, existente.id);
+                }
+
+                usuario = { id: existente.id, nome: existente.nome, email: existente.email };
+            } else {
+                // 3. Conta nova: sem senha e sem admin, como todo cadastro
+                // público. O e-mail já vem confirmado pela Google.
+                const nova = await cliente.query(
+                    `INSERT INTO usuarios (nome, email, senha, admin, google_id, email_verificado)
+                     VALUES ($1, $2, NULL, FALSE, $3, TRUE)
+                     RETURNING id, nome, email`,
+                    [nome, normalizarEmail(email), googleId]
+                );
+                usuario = nova.rows[0];
+                criada = true;
+
+                // Mesmo histórico inicial do cadastro com senha, para a central
+                // da conta não abrir diferente para quem veio pelo Google.
+                await cliente.query(
+                    'INSERT INTO historico_compras (usuario_id, pedido, status) VALUES ($1, $2, $3)',
+                    [usuario.id, 'Pedido de boas-vindas', 'Em transporte']
+                );
+            }
+        }
+
+        await cliente.query('COMMIT');
+    } catch (erro) {
+        await cliente.query('ROLLBACK').catch(() => {});
+        console.error('Erro no login com Google:', erro);
+        return res.status(500).json({ mensagem: 'Não foi possível entrar com o Google.' });
+    } finally {
+        cliente.release();
+    }
+
+    try {
+        await iniciarSessao(res, usuario);
+    } catch (erro) {
+        console.error('Erro ao abrir sessão do login com Google:', erro);
+        return res.status(500).json({ mensagem: 'Não foi possível entrar com o Google.' });
+    }
+
+    return res.status(criada ? 201 : 200).json({
+        mensagem: criada ? 'Conta criada com o Google.' : 'Login realizado com sucesso!',
+        usuario
+    });
+});
+
+// Só com senha definida: sem ela, desconectar deixaria a conta sem nenhuma
+// forma de entrar. A condição vai no próprio UPDATE, então não há janela entre
+// conferir e gravar.
+app.post('/auth/google/desconectar', autenticarToken, async (req, res) => {
+    try {
+        const situacao = await pool.query(
+            'SELECT senha IS NOT NULL AS tem_senha, google_id IS NOT NULL AS conectado FROM usuarios WHERE id = $1',
+            [req.usuario.id]
+        );
+
+        if (situacao.rowCount === 0) {
+            return res.status(404).json({ mensagem: 'Usuário não encontrado.' });
+        }
+
+        if (!situacao.rows[0].tem_senha) {
+            return res.status(400).json({
+                mensagem: 'Defina uma senha antes de desconectar do Google: sem ela, a conta ficaria sem nenhuma forma de entrar.'
+            });
+        }
+
+        if (!situacao.rows[0].conectado) {
+            return res.json({ mensagem: 'Sua conta já não está conectada ao Google.' });
+        }
+
+        await pool.query('UPDATE usuarios SET google_id = NULL WHERE id = $1 AND senha IS NOT NULL', [req.usuario.id]);
+        return res.json({ mensagem: 'Conta desconectada do Google. A partir de agora, entre com e-mail e senha.' });
+    } catch (erro) {
+        console.error('Erro ao desconectar do Google:', erro);
+        return res.status(500).json({ mensagem: 'Não foi possível desconectar do Google.' });
+    }
+});
+
 app.get('/auth/me', autenticarToken, async (req, res) => {
     try {
         const usuarioResult = await pool.query(
-            'SELECT id, nome, email, admin, criado_em FROM usuarios WHERE id = $1',
+            `SELECT ${CAMPOS_USUARIO_CONTA} FROM usuarios WHERE id = $1`,
             [req.usuario.id]
         );
 
@@ -1643,7 +2434,7 @@ app.put('/auth/me', autenticarToken, async (req, res) => {
 
     try {
         const resultado = await pool.query(
-            'UPDATE usuarios SET nome = $1 WHERE id = $2 RETURNING id, nome, email, admin, criado_em',
+            `UPDATE usuarios SET nome = $1 WHERE id = $2 RETURNING ${CAMPOS_USUARIO_CONTA}`,
             [nome, req.usuario.id]
         );
 
@@ -1664,27 +2455,39 @@ app.post('/auth/alterar-senha', limitadorSenha, autenticarToken, async (req, res
     const senhaAtual = String((req.body && req.body.senhaAtual) || '');
     const novaSenha = String((req.body && req.body.novaSenha) || '');
 
-    if (!senhaAtual || !novaSenha) {
-        return res.status(400).json({ mensagem: 'Informe a senha atual e a nova senha.' });
-    }
-
-    if (novaSenha.length < 8) {
-        return res.status(400).json({ mensagem: 'A nova senha precisa ter pelo menos 8 caracteres.' });
-    }
-
-    if (novaSenha === senhaAtual) {
-        return res.status(400).json({ mensagem: 'A nova senha precisa ser diferente da atual.' });
-    }
-
     try {
-        const usuario = await pool.query('SELECT senha FROM usuarios WHERE id = $1', [req.usuario.id]);
+        const usuario = await pool.query('SELECT senha, email FROM usuarios WHERE id = $1', [req.usuario.id]);
 
         if (usuario.rowCount === 0) {
             return res.status(404).json({ mensagem: 'Usuário não encontrado.' });
         }
 
-        if (!(await bcrypt.compare(senhaAtual, usuario.rows[0].senha))) {
-            return res.status(403).json({ mensagem: 'A senha atual não confere.' });
+        // Conta criada pelo Google, ainda sem senha: esta rota vira "definir a
+        // primeira senha". Não há senha atual a conferir — e é essa senha que
+        // depois libera o botão de desconectar do Google.
+        const temSenha = usuario.rows[0].senha !== null;
+
+        if (!novaSenha || (temSenha && !senhaAtual)) {
+            return res.status(400).json({
+                mensagem: temSenha ? 'Informe a senha atual e a nova senha.' : 'Informe a nova senha.'
+            });
+        }
+
+        const problemaSenha = validarForcaSenha(novaSenha, usuario.rows[0].email);
+        if (problemaSenha) {
+            return res.status(400).json({ mensagem: problemaSenha });
+        }
+
+        // Com senha, a regra de sempre: a atual precisa conferir. É a guarda
+        // contra um token roubado bastar para tomar a conta.
+        if (temSenha) {
+            if (novaSenha === senhaAtual) {
+                return res.status(400).json({ mensagem: 'A nova senha precisa ser diferente da atual.' });
+            }
+
+            if (!(await bcrypt.compare(senhaAtual, usuario.rows[0].senha))) {
+                return res.status(403).json({ mensagem: 'A senha atual não confere.' });
+            }
         }
 
         await pool.query('UPDATE usuarios SET senha = $1 WHERE id = $2', [
@@ -1702,7 +2505,9 @@ app.post('/auth/alterar-senha', limitadorSenha, autenticarToken, async (req, res
         // Os outros dispositivos ainda têm o access token, que não se revoga
         // e dura até 15 minutos. A resposta diz isso em vez de prometer "na hora".
         return res.json({
-            mensagem: 'Senha alterada com sucesso.',
+            mensagem: temSenha
+                ? 'Senha alterada com sucesso.'
+                : 'Senha definida. Agora você também pode entrar com e-mail e senha.',
             aviso: 'Sessões abertas em outros dispositivos serão encerradas em até 15 minutos.'
         });
     } catch (erro) {
@@ -1747,14 +2552,17 @@ app.get('/auth/me/avaliacoes', autenticarToken, async (req, res) => {
 });
 
 app.post('/auth/recuperar-senha', limitadorSenha, async (req, res) => {
-    const { email } = req.body;
+    const email = normalizarEmail(req.body && req.body.email);
 
     if (!email) {
         return res.status(400).json({ mensagem: 'Informe um e-mail para continuar.' });
     }
 
     try {
-        const resultado = await pool.query('SELECT id FROM usuarios WHERE email = $1', [email]);
+        const resultado = await pool.query(
+            'SELECT id FROM usuarios WHERE lower(email) = $1 ORDER BY (email = $1) DESC LIMIT 1',
+            [email]
+        );
 
         // O mesmo log, idêntico, nos dois caminhos. Se ele saísse só quando a
         // conta existe, a presença da linha no log revelaria o cadastro — o
@@ -1814,8 +2622,21 @@ app.post('/auth/redefinir-senha', limitadorSenha, async (req, res) => {
             return res.status(400).json({ mensagem: 'Este link expirou. Solicite um novo.' });
         }
 
+        const conta = await pool.query('SELECT email FROM usuarios WHERE id = $1', [reset.usuario_id]);
+        const problemaSenha = validarForcaSenha(senha, conta.rows[0] && conta.rows[0].email);
+        if (problemaSenha) {
+            return res.status(400).json({ mensagem: problemaSenha });
+        }
+
+        // O link chegou pelo e-mail: usá-lo prova que a pessoa controla o
+        // endereço, então a conta fica confirmada. É também o caminho de quem
+        // teve o e-mail cadastrado por outra pessoa — a senha que vale passa a
+        // ser a dela.
         const senhaHash = await bcrypt.hash(senha, 10);
-        await pool.query('UPDATE usuarios SET senha = $1 WHERE id = $2', [senhaHash, reset.usuario_id]);
+        await pool.query(
+            'UPDATE usuarios SET senha = $1, email_verificado = TRUE WHERE id = $2',
+            [senhaHash, reset.usuario_id]
+        );
         // Invalida todos os pedidos pendentes da pessoa, não só o do link
         // clicado. Quem pediu recuperação duas vezes ficaria com o outro link
         // valendo por até 30 minutos depois de a senha já ter sido trocada.
@@ -2567,9 +3388,10 @@ app.get('/admin/pedidos/:id', limitadorAdmin, autenticarToken, exigirAdmin, asyn
 
     try {
         const pedidoResult = await pool.query(
-            `SELECT p.*, u.nome AS usuario_nome, u.email AS usuario_email
+            `SELECT p.*, u.nome AS usuario_nome, u.email AS usuario_email, c.codigo AS cupom_codigo
              FROM pedidos p
              JOIN usuarios u ON u.id = p.usuario_id
+             LEFT JOIN cupons c ON c.id = p.cupom_id
              WHERE p.id = $1`,
             [id]
         );
@@ -2595,6 +3417,9 @@ app.get('/admin/pedidos/:id', limitadorAdmin, autenticarToken, exigirAdmin, asyn
                 status: pedido.status,
                 statusPagamento: pedido.payment_status,
                 subtotal: Number(pedido.subtotal),
+                desconto: Number(pedido.desconto),
+                cupom: pedido.cupom_codigo || null,
+                cupomContabilizado: pedido.cupom_contabilizado,
                 frete: Number(pedido.frete),
                 total: Number(pedido.total),
                 moeda: pedido.moeda,
@@ -2626,6 +3451,219 @@ app.get('/admin/pedidos/:id', limitadorAdmin, autenticarToken, exigirAdmin, asyn
     }
 });
 
+// ---------------------------------------------------------------------------
+// Painel: cupons
+// ---------------------------------------------------------------------------
+
+const REGEX_CODIGO_CUPOM = /^[A-Z0-9_-]{3,50}$/;
+
+function campoVazio(valor) {
+    return valor === undefined || valor === null || (typeof valor === 'string' && valor.trim() === '');
+}
+
+// Vazio vira null; o que não for data válida vira undefined, para acusar erro.
+function lerDataOpcional(valor) {
+    if (campoVazio(valor)) return null;
+    const data = new Date(valor);
+    return Number.isNaN(data.getTime()) ? undefined : data;
+}
+
+// Valida um cupom completo. Na edição, o corpo parcial é mesclado com o cupom
+// atual antes de chegar aqui, para as regras que cruzam campos (percentual até
+// 100, fim depois do início) valerem sobre o resultado final, e não só sobre o
+// pedaço que mudou.
+function validarDadosCupom(corpo) {
+    const erros = [];
+    const dados = {};
+
+    dados.codigo = normalizarCodigoCupom(corpo.codigo);
+    if (!REGEX_CODIGO_CUPOM.test(dados.codigo)) {
+        erros.push('O código precisa ter de 3 a 50 caracteres entre letras, números, "-" e "_".');
+    }
+
+    dados.tipo = corpo.tipo;
+    if (!['percentual', 'fixo'].includes(dados.tipo)) {
+        erros.push('O tipo precisa ser "percentual" ou "fixo".');
+    }
+
+    dados.valor = Number(corpo.valor);
+    if (campoVazio(corpo.valor) || !Number.isFinite(dados.valor) || dados.valor <= 0) {
+        erros.push('O valor do desconto precisa ser maior que zero.');
+    } else if (dados.tipo === 'percentual' && dados.valor > 100) {
+        erros.push('Um desconto percentual não passa de 100%.');
+    } else if (dados.valor > 99999999.99) {
+        erros.push('Valor do desconto alto demais.');
+    }
+    dados.valor = deCentavos(paraCentavos(dados.valor));
+
+    dados.valorMinimoPedido = campoVazio(corpo.valorMinimoPedido) ? 0 : Number(corpo.valorMinimoPedido);
+    if (!Number.isFinite(dados.valorMinimoPedido) || dados.valorMinimoPedido < 0 || dados.valorMinimoPedido > 99999999.99) {
+        erros.push('O pedido mínimo precisa ser zero ou um valor positivo.');
+    }
+
+    dados.usoMaximo = campoVazio(corpo.usoMaximo) ? null : Number(corpo.usoMaximo);
+    if (dados.usoMaximo !== null && (!Number.isInteger(dados.usoMaximo) || dados.usoMaximo < 1)) {
+        erros.push('O limite total de usos precisa ser um número inteiro a partir de 1, ou vazio para ilimitado.');
+    }
+
+    dados.usoMaximoPorUsuario = campoVazio(corpo.usoMaximoPorUsuario) ? 1 : Number(corpo.usoMaximoPorUsuario);
+    if (!Number.isInteger(dados.usoMaximoPorUsuario) || dados.usoMaximoPorUsuario < 1) {
+        erros.push('O limite por cliente precisa ser um número inteiro a partir de 1.');
+    }
+
+    dados.validoDe = lerDataOpcional(corpo.validoDe);
+    dados.validoAte = lerDataOpcional(corpo.validoAte);
+    if (dados.validoDe === undefined) erros.push('Data de início inválida.');
+    if (dados.validoAte === undefined) erros.push('Data de fim inválida.');
+    if (dados.validoDe && dados.validoAte && dados.validoAte <= dados.validoDe) {
+        erros.push('O fim da validade precisa ser depois do início.');
+    }
+
+    dados.ativo = corpo.ativo === undefined ? true : (corpo.ativo === true || corpo.ativo === 'true');
+
+    return { valido: erros.length === 0, erros, dados };
+}
+
+function mapearCupom(linha) {
+    return {
+        id: linha.id,
+        codigo: linha.codigo,
+        tipo: linha.tipo,
+        valor: Number(linha.valor),
+        ativo: linha.ativo,
+        validoDe: linha.valido_de,
+        validoAte: linha.valido_ate,
+        valorMinimoPedido: Number(linha.valor_minimo_pedido),
+        usoMaximo: linha.uso_maximo,
+        usoMaximoPorUsuario: linha.uso_maximo_por_usuario,
+        usos: linha.usos === undefined ? undefined : Number(linha.usos),
+        criadoEm: linha.criado_em
+    };
+}
+
+const SELECT_CUPOM_COM_USOS = `
+    SELECT c.*, (SELECT count(*) FROM cupom_usos u WHERE u.cupom_id = c.id)::int AS usos
+      FROM cupons c`;
+
+app.get('/admin/cupons', limitadorAdmin, autenticarToken, exigirAdmin, async (req, res) => {
+    try {
+        const resultado = await pool.query(`${SELECT_CUPOM_COM_USOS} ORDER BY c.criado_em DESC, c.id DESC`);
+        return res.json({ cupons: resultado.rows.map(mapearCupom) });
+    } catch (erro) {
+        console.error('Erro ao listar cupons:', erro);
+        return res.status(500).json({ mensagem: 'Não foi possível carregar os cupons.' });
+    }
+});
+
+app.post('/admin/cupons', limitadorAdmin, autenticarToken, exigirAdmin, async (req, res) => {
+    const { valido, erros, dados: d } = validarDadosCupom(req.body || {});
+
+    if (!valido) {
+        return res.status(400).json({ mensagem: erros.join(' '), erros });
+    }
+
+    try {
+        const resultado = await pool.query(
+            `INSERT INTO cupons (codigo, tipo, valor, ativo, valido_de, valido_ate,
+                                 valor_minimo_pedido, uso_maximo, uso_maximo_por_usuario)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+             RETURNING *, 0 AS usos`,
+            [d.codigo, d.tipo, d.valor, d.ativo, d.validoDe, d.validoAte,
+                d.valorMinimoPedido, d.usoMaximo, d.usoMaximoPorUsuario]
+        );
+
+        return res.status(201).json({ mensagem: 'Cupom criado.', cupom: mapearCupom(resultado.rows[0]) });
+    } catch (erro) {
+        if (erro.code === '23505') {
+            return res.status(409).json({ mensagem: 'Já existe um cupom com este código.' });
+        }
+        console.error('Erro ao criar cupom:', erro);
+        return res.status(500).json({ mensagem: 'Não foi possível criar o cupom.' });
+    }
+});
+
+// Edição, inclusive de `ativo`. Não há DELETE: cupom não se apaga, se
+// desativa, porque pedidos antigos continuam apontando para ele.
+app.put('/admin/cupons/:id', limitadorAdmin, autenticarToken, exigirAdmin, async (req, res) => {
+    const id = Number(req.params.id);
+
+    if (!Number.isInteger(id) || id <= 0) {
+        return res.status(400).json({ mensagem: 'Identificador inválido.' });
+    }
+
+    try {
+        const atual = await pool.query('SELECT * FROM cupons WHERE id = $1', [id]);
+
+        if (atual.rowCount === 0) {
+            return res.status(404).json({ mensagem: 'Cupom não encontrado.' });
+        }
+
+        const mesclado = { ...mapearCupom(atual.rows[0]), ...(req.body || {}) };
+        const { valido, erros, dados: d } = validarDadosCupom(mesclado);
+
+        if (!valido) {
+            return res.status(400).json({ mensagem: erros.join(' '), erros });
+        }
+
+        const resultado = await pool.query(
+            `UPDATE cupons
+                SET codigo = $1, tipo = $2, valor = $3, ativo = $4, valido_de = $5, valido_ate = $6,
+                    valor_minimo_pedido = $7, uso_maximo = $8, uso_maximo_por_usuario = $9
+              WHERE id = $10
+             RETURNING *, (SELECT count(*) FROM cupom_usos u WHERE u.cupom_id = cupons.id)::int AS usos`,
+            [d.codigo, d.tipo, d.valor, d.ativo, d.validoDe, d.validoAte,
+                d.valorMinimoPedido, d.usoMaximo, d.usoMaximoPorUsuario, id]
+        );
+
+        return res.json({ mensagem: 'Cupom atualizado.', cupom: mapearCupom(resultado.rows[0]) });
+    } catch (erro) {
+        if (erro.code === '23505') {
+            return res.status(409).json({ mensagem: 'Já existe um cupom com este código.' });
+        }
+        console.error('Erro ao atualizar cupom:', erro);
+        return res.status(500).json({ mensagem: 'Não foi possível atualizar o cupom.' });
+    }
+});
+
+// Prévia do cupom no carrinho. Não cria pedido nem conta uso: só roda a mesma
+// conta de /pagamentos/criar e devolve o resultado. Exige login porque o
+// limite por cliente precisa saber quem é o cliente.
+app.post('/cupons/validar', limitadorCupom, autenticarToken, async (req, res) => {
+    const corpo = req.body || {};
+
+    if (!normalizarCodigoCupom(corpo.codigo)) {
+        return res.json({ valido: false, motivo: 'Informe o código do cupom.' });
+    }
+
+    try {
+        // Aqui o campo se chama `codigo` (spec); no checkout, `cupom`. Só itens e
+        // código seguem adiante — o resto do corpo não entra na conta.
+        const resumo = await prepararCheckout({ itens: corpo.itens, cupom: corpo.codigo }, req.usuario);
+        res.locals.cupomEncontrado = resumo.cupomEncontrado === true;
+
+        if (!resumo.ok && resumo.origem === 'carrinho') {
+            return res.status(400).json({ mensagem: resumo.mensagem });
+        }
+
+        if (!resumo.ok) {
+            return res.json({ valido: false, motivo: resumo.mensagem });
+        }
+
+        // Os totais vão prontos: o carrinho exibe a conta do servidor, não refaz.
+        return res.json({
+            valido: true,
+            codigo: resumo.cupom.codigo,
+            desconto: resumo.desconto,
+            subtotal: resumo.subtotal,
+            frete: resumo.frete,
+            total: resumo.total
+        });
+    } catch (erro) {
+        console.error('Erro ao validar cupom:', erro);
+        return res.status(500).json({ mensagem: 'Não foi possível validar o cupom.' });
+    }
+});
+
 app.post('/pagamentos/criar', autenticarToken, async (req, res) => {
     // Recusa antes de tocar no banco ou no Mercado Pago. Sem esta guarda, a
     // ausência de MP_ACCESS_TOKEN virava um 500 com detalhe de configuração.
@@ -2639,38 +3677,27 @@ app.post('/pagamentos/criar', autenticarToken, async (req, res) => {
         return res.status(503).json({ mensagem: 'Banco de dados indisponível no momento.' });
     }
 
-    const { itens } = req.body;
-
     try {
-        const resolucao = await resolverItensCarrinho(itens);
+        // O corpo inteiro vai para prepararCheckout, que só lê itens e cupom.
+        // Um "desconto" ou "total" forjado no corpo é ignorado por construção.
+        const resumo = await prepararCheckout(req.body, req.usuario);
 
-        if (!resolucao.ok) {
-            return res.status(400).json({ mensagem: resolucao.mensagem });
+        if (!resumo.ok) {
+            return res.status(400).json({ mensagem: resumo.mensagem });
         }
 
-        const itensNormalizados = resolucao.itens;
+        const { itens: itensNormalizados, subtotal, desconto, frete, total, cupom } = resumo;
 
         const clienteMP = getMercadoPagoClient();
         const preferenceClient = new Preference(clienteMP);
 
-        const subtotal = itensNormalizados.reduce((acumulador, item) => acumulador + (item.unit_price * item.quantity), 0);
-        const frete = calcularFrete(subtotal);
-        const total = subtotal + frete;
-
-        const pedido = await registrarPedidoPendente(req.usuario, itensNormalizados, subtotal, frete, total);
+        const pedido = await registrarPedidoPendente(req.usuario, itensNormalizados, subtotal, frete, total, {
+            cupomId: cupom ? cupom.id : null,
+            desconto
+        });
         const baseUrl = getBaseUrl(req);
 
-        // produtoId é de uso interno; a API do Mercado Pago não o conhece.
-        const itensMercadoPago = itensNormalizados.map(({ produtoId, ...item }) => item);
-
-        if (frete > 0) {
-            itensMercadoPago.push({
-                title: 'Frete',
-                quantity: 1,
-                currency_id: 'BRL',
-                unit_price: Number(frete.toFixed(2))
-            });
-        }
+        const itensMercadoPago = montarItensMercadoPago(resumo);
 
         const preference = await preferenceClient.create({
             body: {

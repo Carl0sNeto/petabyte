@@ -34,9 +34,16 @@ Armazena dados dos usuários cadastrados.
 | id | SERIAL PRIMARY KEY | Identificador único |
 | nome | VARCHAR(100) NOT NULL | Nome completo do usuário |
 | email | VARCHAR(255) NOT NULL UNIQUE | Email do usuário |
-| senha | TEXT NOT NULL | Senha criptografada com bcrypt |
+| senha | TEXT | Senha criptografada com bcrypt. `NULL` em conta criada pelo Google até a pessoa definir uma |
 | admin | BOOLEAN NOT NULL DEFAULT FALSE | Acesso ao painel administrativo |
+| google_id | TEXT UNIQUE | `sub` da conta Google vinculada. Nunca sai pela API; `/auth/me` só diz se existe |
+| email_verificado | BOOLEAN NOT NULL DEFAULT FALSE | Conta com senha só entra depois de confirmar o e-mail por link. As contas anteriores à migration 012 entraram como `TRUE` |
 | criado_em | TIMESTAMP | Data/hora do cadastro |
+
+O e-mail de contas novas é gravado em **minúsculas**, e o login compara
+ignorando maiúsculas, porque contas antigas foram gravadas como a pessoa
+digitou. O cadastro com senha e a newsletter só aceitam provedores conhecidos
+(`DOMINIOS_EMAIL_PERMITIDOS` em `server.js`).
 
 O cadastro público sempre grava `admin = FALSE`. A promoção acontece apenas pela
 linha de comando (`npm run criar-admin`), nunca pela interface — veja
@@ -112,6 +119,9 @@ Armazena os pedidos criados no checkout e o status sincronizado com o gateway.
 | total | NUMERIC(10,2) NOT NULL | Total do pedido |
 | moeda | VARCHAR(10) NOT NULL | Moeda usada no checkout |
 | estoque_baixado | BOOLEAN NOT NULL DEFAULT FALSE | Impede que a confirmação manual e o webhook debitem o estoque duas vezes |
+| cupom_id | INTEGER | FK para cupons.id (ON DELETE SET NULL) |
+| desconto | NUMERIC(10,2) NOT NULL DEFAULT 0 | Desconto do cupom, recalculado no servidor. `total = subtotal − desconto + frete` |
+| cupom_contabilizado | BOOLEAN NOT NULL DEFAULT FALSE | Espelho de `estoque_baixado` para o uso do cupom: conta uma vez, na aprovação |
 | criado_em | TIMESTAMP | Data/hora da criação |
 | atualizado_em | TIMESTAMP | Última atualização |
 
@@ -157,6 +167,49 @@ revogado.
 | expira_em | TIMESTAMP NOT NULL | 30 dias depois da emissão, calculado no banco |
 | revogado_em | TIMESTAMP | Preenchido na rotação, no logout, na troca de senha ou quando se detecta reuso |
 | substituido_por | INTEGER | FK para o token que o substituiu na rotação. Distingue "trocado por outro" (reapresentar é reuso) de "sessão encerrada" |
+
+### 8. **cupons**
+Cupons de desconto, gerenciados pelo painel. Não se apagam: desativam
+(`ativo = FALSE`), porque pedidos antigos continuam apontando para eles.
+
+| Campo | Tipo | Descrição |
+|-------|------|-----------|
+| id | SERIAL PRIMARY KEY | Identificador único |
+| codigo | VARCHAR(50) NOT NULL UNIQUE | Sempre em maiúsculas |
+| tipo | VARCHAR(20) NOT NULL | `percentual` (até 100) ou `fixo` (limitado ao subtotal) |
+| valor | NUMERIC(10,2) NOT NULL | Percentual ou reais, conforme o tipo |
+| ativo | BOOLEAN NOT NULL DEFAULT TRUE | Desativado deixa de valer |
+| valido_de / valido_ate | TIMESTAMPTZ | Janela de validade, opcional. Com fuso: é um instante, não uma hora local |
+| valor_minimo_pedido | NUMERIC(10,2) NOT NULL DEFAULT 0 | Subtotal mínimo, antes do desconto |
+| uso_maximo | INTEGER | Total de usos permitidos; `NULL` = ilimitado |
+| uso_maximo_por_usuario | INTEGER NOT NULL DEFAULT 1 | Usos por cliente |
+| criado_em | TIMESTAMP NOT NULL | Data/hora do cadastro |
+
+### 9. **cupom_usos**
+Um uso por pedido pago com cupom. A linha nasce na aprovação do pagamento e
+some no estorno, cancelamento ou chargeback — é daqui que saem as contagens de
+`uso_maximo` e `uso_maximo_por_usuario`.
+
+| Campo | Tipo | Descrição |
+|-------|------|-----------|
+| id | SERIAL PRIMARY KEY | Identificador único |
+| cupom_id | INTEGER NOT NULL | FK para cupons.id (ON DELETE CASCADE) |
+| usuario_id | INTEGER NOT NULL | FK para usuarios.id (ON DELETE CASCADE) |
+| pedido_id | INTEGER NOT NULL UNIQUE | FK para pedidos.id (ON DELETE CASCADE). O UNIQUE é a rede contra contar o mesmo pedido duas vezes |
+| usado_em | TIMESTAMP NOT NULL | Data/hora da aprovação |
+
+### 10. **verificacoes_email**
+Links de confirmação de e-mail do cadastro com senha. Mesmo desenho de
+`password_resets`: só o hash do token é gravado.
+
+| Campo | Tipo | Descrição |
+|-------|------|-----------|
+| id | SERIAL PRIMARY KEY | Identificador único |
+| usuario_id | INTEGER NOT NULL | FK para usuarios.id (ON DELETE CASCADE) |
+| token_hash | TEXT NOT NULL UNIQUE | SHA-256 do token. O valor bruto só vai no link do e-mail |
+| criado_em | TIMESTAMP NOT NULL | Data/hora do envio |
+| expira_em | TIMESTAMP NOT NULL | 24 horas depois, calculado e comparado no banco |
+| usado_em | TIMESTAMP | Preenchido na confirmação, ou quando um link mais novo substitui este |
 
 ## Como Executar o Script
 
@@ -214,7 +267,14 @@ No deploy isso já acontece sozinho: o `startCommand` do `render.yaml` roda
 | `migrations/005_catalogo_gamer.sql` | Cadastra os 10 produtos gamer iniciais |
 | `migrations/006_reconcilia_placas_duplicadas.sql` | Reconcilia duas placas de vídeo que já existiam cadastradas à mão |
 | `migrations/007_pagina_de_produto.sql` | Adiciona `preco_original` e `especificacoes` em produtos, e cria `produto_imagens` e `avaliacoes` |
-| `migrations/011_refresh_tokens.sql` | Cria `refresh_tokens`, que guarda as sessões de login. A numeração pula 008 a 010, reservados para specs que ainda não entraram |
+| `migrations/008_cupons_de_desconto.sql` | Cria `cupons` e `cupom_usos`, e adiciona `cupom_id`, `desconto` e `cupom_contabilizado` em pedidos |
+| `migrations/010_login_com_google.sql` | Torna `usuarios.senha` opcional e adiciona `usuarios.google_id` |
+| `migrations/011_refresh_tokens.sql` | Cria `refresh_tokens`, que guarda as sessões de login |
+| `migrations/012_verificacao_de_email.sql` | Adiciona `usuarios.email_verificado` e cria `verificacoes_email`. As contas que já existiam entram como verificadas, uma única vez |
+
+A 009 está reservada para uma spec que ainda não entrou. A 011 foi escrita antes
+da 008 e da 010; como o runner aplica em ordem alfabética e tudo é idempotente,
+a ordem de chegada dos arquivos não importa.
 
 A migration 001 aborta com erro se houver e-mails duplicados em `usuarios`.
 Nesse caso, consolide os registros antes de aplicá-la.
