@@ -1,0 +1,100 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="description" content="Catálogo completo da Petabyte: busque por nome, filtre por categoria e faixa de preço.">
+    <title>Petabyte | Catálogo</title>
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='7' fill='%23081221'/><text x='16' y='23' font-family='sans-serif' font-size='20' font-weight='700' fill='%2322d3ee' text-anchor='middle'>P</text></svg>">
+    <link rel="stylesheet" href="estilos.css">
+</head>
+<body data-page="catalogo">
+    <header class="topo">
+        <div class="container topo-barra">
+            <a class="marca" href="E-Commerce.html">Peta<em>byte</em> <span>Tecnologia</span></a>
+            <nav class="topo-nav" aria-label="Navegação principal">
+                <a href="E-Commerce.html">Início</a>
+                <a href="catalogo.html" aria-current="page">Catálogo</a>
+            </nav>
+            <div class="topo-acoes">
+                <div class="menu-conta" id="menuConta"></div>
+                <a class="link-carrinho" href="cart.html">
+                    Carrinho <span id="cartCount" class="contador-carrinho">0</span>
+                </a>
+            </div>
+        </div>
+        <div class="barra-confianca">
+            <div class="container">
+                <ul>
+                    <li>🏷️ <b>Cupons de desconto</b> no carrinho</li>
+                    <li>💳 Até <b>12x sem juros</b></li>
+                    <li>🛡️ <b>Garantia oficial</b> de fábrica</li>
+                    <li>🔒 Pagamento pelo <b>Mercado Pago</b></li>
+                </ul>
+            </div>
+        </div>
+    </header>
+
+    <main class="container">
+        <div class="secao-titulo">
+            <h1 class="catalogo-titulo">Catálogo</h1>
+            <!-- Anunciado ao leitor de tela a cada nova busca ou filtro. -->
+            <span class="apoio" id="resumoCatalogo" role="status" aria-live="polite"></span>
+        </div>
+
+        <!-- O estado de todos os filtros vive na URL (catalogo.js): Voltar e
+             um link compartilhado reabrem exatamente a mesma busca. -->
+        <form class="catalogo-filtros" id="formCatalogo" role="search" novalidate>
+            <div class="campo-busca">
+                <label for="campoBusca">Buscar</label>
+                <input id="campoBusca" name="busca" type="search" maxlength="100"
+                       placeholder="Nome, marca ou característica — ex.: RTX, sem fio, 144Hz"
+                       autocomplete="off">
+            </div>
+
+            <div class="filtros" id="filtrosCategoria" role="group" aria-label="Filtrar por categoria"></div>
+
+            <div class="catalogo-linha">
+                <div>
+                    <label for="campoPrecoMin">Preço mínimo (R$)</label>
+                    <input id="campoPrecoMin" name="precoMin" type="number" min="0" step="0.01" inputmode="decimal" placeholder="0,00">
+                </div>
+                <div>
+                    <label for="campoPrecoMax">Preço máximo (R$)</label>
+                    <input id="campoPrecoMax" name="precoMax" type="number" min="0" step="0.01" inputmode="decimal" placeholder="sem limite">
+                </div>
+                <div>
+                    <label for="campoOrdenar">Ordenar por</label>
+                    <select id="campoOrdenar" name="ordenar">
+                        <option value="recentes">Mais recentes</option>
+                        <option value="menor-preco">Menor preço</option>
+                        <option value="maior-preco">Maior preço</option>
+                        <option value="az">Nome, de A a Z</option>
+                        <option value="za">Nome, de Z a A</option>
+                    </select>
+                </div>
+                <button class="btn btn-secondary" type="button" id="limparFiltros">Limpar filtros</button>
+            </div>
+        </form>
+
+        <!-- Mesmo id da home: script.js liga o "Adicionar ao carrinho" por
+             delegação neste contêiner. -->
+        <div class="grade-produtos" id="productGrid" aria-busy="true">
+            <p class="muted">Carregando produtos...</p>
+        </div>
+
+        <nav class="paginacao-catalogo" id="paginacaoCatalogo" aria-label="Páginas do catálogo"></nav>
+    </main>
+
+    <footer class="rodape">
+        <div class="container rodape-fim">
+            <span>Petabyte © 2026 — Todos os direitos reservados.</span>
+            <span>Pagamentos via Mercado Pago</span>
+        </div>
+    </footer>
+
+    <script src="sessao.js"></script>
+    <script src="script.js"></script>
+    <script src="catalogo.js"></script>
+</body>
+</html>

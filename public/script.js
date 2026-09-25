@@ -29,7 +29,6 @@ function escapeHtml(valor) {
         .replace(/'/g, '&#39;');
 }
 
-let catalogoCache = null;
 let categoriasCache = [];
 let configCache = null;
 
@@ -52,21 +51,24 @@ async function carregarConfig() {
     return configCache;
 }
 
-async function carregarCatalogo() {
-    if (catalogoCache) {
-        return catalogoCache;
-    }
-
-    const response = await fetch(apiUrl('/produtos'));
+// GET de uma rota pública de produtos, que devolve JSON ou uma mensagem de erro.
+async function buscarProdutos(caminho) {
+    const response = await fetch(apiUrl(caminho));
     const data = await lerResposta(response);
 
     if (!response.ok) {
         throw new Error(data.mensagem || 'Não foi possível carregar os produtos.');
     }
 
-    catalogoCache = Array.isArray(data.produtos) ? data.produtos : [];
-    categoriasCache = Array.isArray(data.categorias) ? data.categorias : [];
-    return catalogoCache;
+    return data;
+}
+
+// Os produtos do carrinho, pedidos pelo id. O catálogo agora é paginado, e um
+// item fora da primeira página sumiria do carrinho se ele fosse montado a
+// partir da listagem comum.
+async function carregarProdutosDoCarrinho(ids) {
+    const data = await buscarProdutos(`/produtos?ids=${ids.join(',')}`);
+    return Array.isArray(data.produtos) ? data.produtos : [];
 }
 
 // O carrinho guarda apenas { id, quantidade }. Preço e nome nunca são
@@ -437,7 +439,7 @@ async function detalharCarrinho() {
         return [];
     }
 
-    const produtos = await carregarCatalogo();
+    const produtos = await carregarProdutosDoCarrinho(cart.map((item) => item.id));
     const produtosPorId = new Map(produtos.map((produto) => [produto.id, produto]));
 
     const detalhados = cart
@@ -718,100 +720,81 @@ function rotuloCategoria(slug) {
     return encontrada ? encontrada.rotulo : slug;
 }
 
-// Os botões de filtro vêm da API, e não fixos no HTML: assim uma categoria
-// nova aparece sozinha, e uma que ficou sem produto não vira filtro vazio.
-function renderFiltros() {
-    const caixa = document.getElementById('filtrosCategoria');
-    if (!caixa) return;
+// O cartão de produto da home e do catálogo. Um lugar só, para as duas
+// vitrines não divergirem no preço, no selo ou no botão de compra.
+//
+// Sem loading="lazy" por padrão: na home, os destaques são a primeira coisa
+// que o visitante vê, e adiar essas imagens só atrasaria o que importa. O
+// catálogo, que tem página de 20 e rola, pede o lazy.
+function renderCartaoProduto(produto, { adiarImagem = false } = {}) {
+    const foto = produto.imagemUrl
+        ? `<img src="${escapeHtml(produto.imagemUrl)}" alt="${escapeHtml(produto.nome)}"${adiarImagem ? ' loading="lazy"' : ''}>`
+        : '<span class="sem-foto">Sem foto</span>';
 
-    if (categoriasCache.length === 0) {
-        caixa.innerHTML = '';
-        return;
+    let estoque = '<span class="estoque estoque-fora">Indisponível</span>';
+    if (produto.disponivel) {
+        estoque = produto.estoqueBaixo
+            ? '<span class="estoque estoque-baixo">Últimas unidades</span>'
+            : '<span class="estoque estoque-ok">Em estoque</span>';
     }
 
-    const botoes = [{ slug: 'todos', rotulo: 'Todos' }, ...categoriasCache];
+    const nota = produto.totalAvaliacoes > 0
+        ? `<div class="nota-linha">${estrelasSimples(produto.notaMedia)}
+             <span class="valor">${produto.notaMedia.toFixed(1)}</span>
+             <span>(${produto.totalAvaliacoes})</span></div>`
+        : '<div class="nota-linha vazia">Sem avaliações</div>';
 
-    caixa.innerHTML = botoes.map((categoria, indice) => `
-        <button class="filtro-btn${indice === 0 ? ' active' : ''}" type="button" data-filter="${escapeHtml(categoria.slug)}">
-            ${escapeHtml(categoria.rotulo)}
-        </button>`).join('');
+    const desconto = renderDesconto(produto);
 
-    caixa.querySelectorAll('.filtro-btn').forEach((botao) => {
-        botao.addEventListener('click', () => {
-            caixa.querySelectorAll('.filtro-btn').forEach((outro) => outro.classList.remove('active'));
-            botao.classList.add('active');
+    const enderecoProduto = `produto.html?id=${produto.id}`;
 
-            const filtro = botao.dataset.filter;
-            document.querySelectorAll('.produto[data-category]').forEach((card) => {
-                card.style.display = filtro === 'todos' || filtro === card.dataset.category ? 'flex' : 'none';
-            });
-        });
-    });
+    return `
+        <article class="produto" data-category="${escapeHtml(produto.categoria)}">
+            <a class="produto-foto" href="${enderecoProduto}" aria-label="Ver ${escapeHtml(produto.nome)}">
+                <span class="produto-chip">${escapeHtml(rotuloCategoria(produto.categoria))}</span>
+                ${foto}
+            </a>
+            <div class="produto-corpo">
+                <h3 class="produto-nome">
+                    <a href="${enderecoProduto}">${escapeHtml(produto.nome)}</a>
+                </h3>
+                <p class="produto-desc">${escapeHtml(produto.descricao)}</p>
+                ${nota}
+                ${estoque}
+                <div class="produto-preco">
+                    ${desconto.precoAntigo}
+                    <span class="valor">${formatCurrency(produto.preco)}${desconto.selo}</span>
+                    <span class="parcelas">ou 12x de ${formatCurrency(produto.preco / 12)} sem juros</span>
+                </div>
+                <button class="btn btn-comprar add-to-cart" type="button" data-id="${produto.id}"${produto.disponivel ? '' : ' disabled'}>
+                    ${produto.disponivel ? 'Adicionar ao carrinho' : 'Indisponível'}
+                </button>
+            </div>
+        </article>`;
 }
 
-// Monta a vitrine a partir de GET /produtos. Antes os 6 produtos eram HTML
-// fixo e o preço era lido do texto da página.
+// A home mostra só os destaques, curados no painel. A navegação completa, com
+// busca e filtros, fica em catalogo.html.
 async function renderProductGrid() {
     const grid = document.getElementById('productGrid');
     if (!grid) return;
 
     try {
-        const produtos = await carregarCatalogo();
-        renderFiltros();
+        const data = await buscarProdutos('/produtos/destaques');
+        const produtos = Array.isArray(data.produtos) ? data.produtos : [];
+        categoriasCache = Array.isArray(data.categorias) ? data.categorias : [];
 
+        // Sem destaque marcado a home não fica em branco: aponta o catálogo.
         if (produtos.length === 0) {
-            grid.innerHTML = '<p>Nenhum produto disponível no momento.</p>';
+            grid.innerHTML = `
+                <div class="vitrine-vazia">
+                    <p>Nenhum destaque no momento.</p>
+                    <a class="btn btn-primary" href="catalogo.html">Ver o catálogo completo</a>
+                </div>`;
             return;
         }
 
-        grid.innerHTML = produtos.map((produto) => {
-            // Sem loading="lazy": a vitrine é a primeira coisa que o visitante
-            // vê, e adiar essas imagens só atrasaria o que importa na tela.
-            const foto = produto.imagemUrl
-                ? `<img src="${escapeHtml(produto.imagemUrl)}" alt="${escapeHtml(produto.nome)}">`
-                : '<span class="sem-foto">Sem foto</span>';
-
-            let estoque = '<span class="estoque estoque-fora">Indisponível</span>';
-            if (produto.disponivel) {
-                estoque = produto.estoqueBaixo
-                    ? '<span class="estoque estoque-baixo">Últimas unidades</span>'
-                    : '<span class="estoque estoque-ok">Em estoque</span>';
-            }
-
-            const nota = produto.totalAvaliacoes > 0
-                ? `<div class="nota-linha">${estrelasSimples(produto.notaMedia)}
-                     <span class="valor">${produto.notaMedia.toFixed(1)}</span>
-                     <span>(${produto.totalAvaliacoes})</span></div>`
-                : '<div class="nota-linha vazia">Sem avaliações</div>';
-
-            const desconto = renderDesconto(produto);
-
-            const enderecoProduto = `produto.html?id=${produto.id}`;
-
-            return `
-                <article class="produto" data-category="${escapeHtml(produto.categoria)}">
-                    <a class="produto-foto" href="${enderecoProduto}" aria-label="Ver ${escapeHtml(produto.nome)}">
-                        <span class="produto-chip">${escapeHtml(rotuloCategoria(produto.categoria))}</span>
-                        ${foto}
-                    </a>
-                    <div class="produto-corpo">
-                        <h3 class="produto-nome">
-                            <a href="${enderecoProduto}">${escapeHtml(produto.nome)}</a>
-                        </h3>
-                        <p class="produto-desc">${escapeHtml(produto.descricao)}</p>
-                        ${nota}
-                        ${estoque}
-                        <div class="produto-preco">
-                            ${desconto.precoAntigo}
-                            <span class="valor">${formatCurrency(produto.preco)}${desconto.selo}</span>
-                            <span class="parcelas">ou 12x de ${formatCurrency(produto.preco / 12)} sem juros</span>
-                        </div>
-                        <button class="btn btn-comprar add-to-cart" type="button" data-id="${produto.id}"${produto.disponivel ? '' : ' disabled'}>
-                            ${produto.disponivel ? 'Adicionar ao carrinho' : 'Indisponível'}
-                        </button>
-                    </div>
-                </article>`;
-        }).join('');
+        grid.innerHTML = produtos.map((produto) => renderCartaoProduto(produto)).join('');
     } catch (error) {
         console.error(error);
         grid.innerHTML = '<p class="muted">Não foi possível carregar os produtos. Verifique sua conexão e recarregue a página.</p>';
@@ -950,9 +933,6 @@ document.addEventListener('DOMContentLoaded', () => {
             }, 800);
         });
     }
-
-    // Os filtros são criados e ligados por renderFiltros(), depois que a API
-    // responde — não há botões no HTML para escutar neste ponto.
 
     tabs.forEach((tab) => {
         tab.addEventListener('click', () => {

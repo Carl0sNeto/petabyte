@@ -86,7 +86,10 @@ test('painel administrativo', async (t) => {
         ['GET', '/admin/pedidos/1'],
         ['GET', '/admin/cupons'],
         ['POST', '/admin/cupons'],
-        ['PUT', '/admin/cupons/1']
+        ['PUT', '/admin/cupons/1'],
+        ['GET', '/admin/relatorios/vendas'],
+        ['GET', '/admin/relatorios/parados'],
+        ['GET', '/admin/relatorios/exportar']
     ];
 
     await t.test('nenhuma rota /admin responde sem token', async () => {
@@ -245,6 +248,54 @@ test('painel administrativo', async (t) => {
         assert.ok(dados.categorias.every((c) => typeof c.slug === 'string' && typeof c.rotulo === 'string'));
         assert.ok(dados.categorias.some((c) => c.slug === 'hardware'));
         assert.ok(!dados.categorias.some((c) => c.slug === 'casa'), 'a taxonomia antiga não deve sobreviver');
+    });
+
+    await t.test('destaque: marca, define a ordem e desmarca pelo PUT', async () => {
+        const marcar = await pedir('PUT', `/admin/produtos/${produto.id}`, {
+            token: tokenAdmin,
+            corpo: { destaque: true, ordemDestaque: 3 }
+        });
+        assert.equal(marcar.status, 200);
+        assert.equal(marcar.dados.produto.destaque, true);
+        assert.equal(marcar.dados.produto.ordemDestaque, 3);
+
+        const naListagem = await pedir('GET', '/admin/produtos', { token: tokenAdmin });
+        const linha = naListagem.dados.produtos.find((p) => p.id === produto.id);
+        assert.equal(linha.destaque, true, 'o painel precisa ver o destaque para mostrar o selo');
+        assert.equal(linha.ordemDestaque, 3);
+
+        // Tirar do destaque apaga a posição junto: uma ordem esquecida voltaria
+        // a valer sozinha quando o produto fosse marcado de novo.
+        const desmarcar = await pedir('PUT', `/admin/produtos/${produto.id}`, {
+            token: tokenAdmin,
+            corpo: { destaque: false }
+        });
+        assert.equal(desmarcar.dados.produto.destaque, false);
+        assert.equal(desmarcar.dados.produto.ordemDestaque, null);
+    });
+
+    await t.test('destaque: ordem null tira a posição sem mexer no resto do produto', async () => {
+        await pedir('PUT', `/admin/produtos/${produto.id}`, { token: tokenAdmin, corpo: { destaque: true, ordemDestaque: 7 } });
+        const antes = (await pool.query('SELECT nome, preco, estoque, descricao FROM produtos WHERE id = $1', [produto.id])).rows[0];
+
+        const { status, dados } = await pedir('PUT', `/admin/produtos/${produto.id}`, {
+            token: tokenAdmin,
+            corpo: { ordemDestaque: null }
+        });
+
+        assert.equal(status, 200);
+        assert.equal(dados.produto.destaque, true, 'continua em destaque, só sem posição');
+        assert.equal(dados.produto.ordemDestaque, null);
+
+        const depois = (await pool.query('SELECT nome, preco, estoque, descricao FROM produtos WHERE id = $1', [produto.id])).rows[0];
+        assert.deepEqual(depois, antes);
+
+        for (const ordem of [-1, 2.5, 'primeiro', 10000]) {
+            const recusa = await pedir('PUT', `/admin/produtos/${produto.id}`, { token: tokenAdmin, corpo: { ordemDestaque: ordem } });
+            assert.equal(recusa.status, 400, `deveria recusar ordem ${JSON.stringify(ordem)}`);
+        }
+
+        await pedir('PUT', `/admin/produtos/${produto.id}`, { token: tokenAdmin, corpo: { destaque: false } });
     });
 
     await t.test('recusa edição sem nenhum campo', async () => {

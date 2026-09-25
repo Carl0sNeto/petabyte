@@ -64,7 +64,7 @@ async function carregarProdutos() {
         categorias = dados.categorias || categorias;
 
         if (dados.produtos.length === 0) {
-            corpo.innerHTML = '<tr><td colspan="9" class="muted">Nenhum produto cadastrado.</td></tr>';
+            corpo.innerHTML = '<tr><td colspan="10" class="muted">Nenhum produto cadastrado.</td></tr>';
             return;
         }
 
@@ -93,6 +93,7 @@ async function carregarProdutos() {
                     <td>${produto.ativo
                         ? '<span class="pill pill-ok">à venda</span>'
                         : '<span class="pill pill-off">fora do catálogo</span>'}</td>
+                    <td>${seloDestaque(produto)}</td>
                     <td>
                         <div class="acoes">
                             <button class="btn btn-secondary btn-sm" type="button" data-editar="${produto.id}">Editar</button>
@@ -105,8 +106,29 @@ async function carregarProdutos() {
         ligarFallbackDasMiniaturas(corpo);
         window.__produtos = dados.produtos;
     } catch (erro) {
-        corpo.innerHTML = `<tr><td colspan="9" class="muted">${escapeHtml(erro.message)}</td></tr>`;
+        corpo.innerHTML = `<tr><td colspan="10" class="muted">${escapeHtml(erro.message)}</td></tr>`;
     }
+}
+
+// Selo da coluna "Home", para ver quais estão na vitrine sem abrir um por um.
+// Em destaque mas fora do catálogo não aparece na home, e o selo diz isso.
+function seloDestaque(produto) {
+    if (!produto.destaque) return '<span class="muted">—</span>';
+
+    const posicao = produto.ordemDestaque === null ? '' : ` #${produto.ordemDestaque}`;
+
+    if (!produto.ativo) {
+        return `<span class="pill pill-off" title="Marcado como destaque, mas fora do catálogo: não aparece na home.">destaque${posicao} · oculto</span>`;
+    }
+
+    return `<span class="pill pill-destaque">destaque${posicao}</span>`;
+}
+
+// A ordem só vale para produto em destaque; desmarcado, o campo fica
+// desabilitado (e o servidor apaga a posição de qualquer forma).
+function sincronizarCampoOrdem() {
+    const marcado = document.getElementById('campoDestaque').checked;
+    document.getElementById('campoOrdemDestaque').disabled = !marcado;
 }
 
 // Troca a miniatura por um marcador quando a URL não carrega — link quebrado,
@@ -208,6 +230,11 @@ function abrirDialogProduto(produto) {
     document.getElementById('campoGaleria').value = produto && Array.isArray(produto.imagens)
         ? produto.imagens.join('\n')
         : '';
+    document.getElementById('campoDestaque').checked = Boolean(produto && produto.destaque);
+    document.getElementById('campoOrdemDestaque').value = produto && produto.ordemDestaque !== null && produto.ordemDestaque !== undefined
+        ? produto.ordemDestaque
+        : '';
+    sincronizarCampoOrdem();
     preencherCategorias(produto ? produto.categoria : (categorias[0] && categorias[0].slug));
     atualizarPrevia();
 
@@ -234,7 +261,10 @@ async function salvarProduto(evento) {
         precoOriginal: document.getElementById('campoPrecoOriginal').value,
         // Texto "Rótulo: valor" por linha e URLs por linha: o servidor converte.
         especificacoes: document.getElementById('campoEspecificacoes').value,
-        imagens: document.getElementById('campoGaleria').value
+        imagens: document.getElementById('campoGaleria').value,
+        destaque: document.getElementById('campoDestaque').checked,
+        // Vazio vira null no servidor: em destaque, mas sem posição fixa.
+        ordemDestaque: document.getElementById('campoOrdemDestaque').value
     };
 
     botao.disabled = true;
@@ -608,6 +638,92 @@ async function alternarCupom(id) {
 }
 
 // --------------------------------------------------------------------------
+// Navegação: menu lateral
+//
+// Substituiu as abas horizontais em qualquer largura de tela. A seção aberta
+// fica no hash da URL (#relatorios), para recarregar a página sem voltar a
+// Produtos. Quem quiser saber que uma seção abriu escuta o evento
+// "painel:secao" — admin-relatorios.js carrega seus dados só então.
+// --------------------------------------------------------------------------
+
+const SECOES = ['produtos', 'pedidos', 'cupons', 'relatorios'];
+
+function secaoDoHash() {
+    const nome = window.location.hash.replace('#', '');
+    return SECOES.includes(nome) ? nome : 'produtos';
+}
+
+function mostrarSecao(nome) {
+    document.querySelectorAll('section[data-secao]').forEach((secao) => {
+        secao.classList.toggle('hidden', secao.dataset.secao !== nome);
+    });
+
+    document.querySelectorAll('#menuLateral a[data-secao]').forEach((link) => {
+        if (link.dataset.secao === nome) {
+            link.setAttribute('aria-current', 'page');
+        } else {
+            link.removeAttribute('aria-current');
+        }
+    });
+
+    document.dispatchEvent(new CustomEvent('painel:secao', { detail: nome }));
+}
+
+function abrirMenu() {
+    const menu = document.getElementById('menuLateral');
+    menu.showModal();
+    document.getElementById('menuBotao').setAttribute('aria-expanded', 'true');
+
+    // O foco vai para a seção atual, não para o botão de fechar: é de onde a
+    // pessoa parte para escolher outra.
+    const atual = menu.querySelector('a[aria-current="page"]');
+    if (atual) atual.focus();
+}
+
+// Atualiza o botão aqui mesmo, sem esperar o evento "close": ele é
+// assíncrono, e o navegador pode atrasá-lo (aba em segundo plano, janela
+// encoberta). O evento continua ligado para o Esc, que fecha sem passar aqui.
+function aoFecharMenu() {
+    const botao = document.getElementById('menuBotao');
+    if (botao.getAttribute('aria-expanded') === 'false') return;
+    botao.setAttribute('aria-expanded', 'false');
+    botao.focus();
+}
+
+function fecharMenu() {
+    const menu = document.getElementById('menuLateral');
+    if (menu.open) menu.close();
+    aoFecharMenu();
+}
+
+function ligarMenuLateral() {
+    const menu = document.getElementById('menuLateral');
+    const botao = document.getElementById('menuBotao');
+
+    botao.addEventListener('click', abrirMenu);
+    document.getElementById('menuFechar').addEventListener('click', fecharMenu);
+
+    // Esc fecha pelo próprio <dialog>, sem passar por fecharMenu(). O
+    // "cancel" sai na hora da tecla; o "close" cobre o resto.
+    menu.addEventListener('cancel', aoFecharMenu);
+    menu.addEventListener('close', aoFecharMenu);
+
+    // Clique no fundo escurecido: o alvo é o próprio <dialog>, porque o
+    // conteúdo (.menu-lateral-corpo) ocupa todo o painel visível.
+    menu.addEventListener('click', (evento) => {
+        if (evento.target === menu) fecharMenu();
+    });
+
+    // Links de verdade (#pedidos): o hashchange abaixo faz a troca, e abrir
+    // numa aba nova com o botão do meio continua funcionando.
+    menu.querySelectorAll('a[data-secao]').forEach((link) => {
+        link.addEventListener('click', () => fecharMenu());
+    });
+
+    window.addEventListener('hashchange', () => mostrarSecao(secaoDoHash()));
+}
+
+// --------------------------------------------------------------------------
 // Inicialização
 // --------------------------------------------------------------------------
 
@@ -640,6 +756,8 @@ async function iniciar() {
     document.getElementById('bloqueio').classList.add('hidden');
     document.getElementById('painel').classList.remove('hidden');
     document.getElementById('whoami').textContent = dados.usuario.email;
+    document.getElementById('menuBotao').hidden = false;
+    mostrarSecao(secaoDoHash());
 
     await carregarProdutos();
     await carregarPedidos();
@@ -647,20 +765,10 @@ async function iniciar() {
 }
 
 document.addEventListener('DOMContentLoaded', () => {
+    ligarMenuLateral();
     iniciar();
 
-    document.querySelectorAll('.aba').forEach((aba) => {
-        aba.addEventListener('click', () => {
-            document.querySelectorAll('.aba').forEach((outra) => outra.classList.remove('active'));
-            aba.classList.add('active');
-
-            const alvo = aba.dataset.aba;
-            document.getElementById('abaProdutos').classList.toggle('hidden', alvo !== 'produtos');
-            document.getElementById('abaPedidos').classList.toggle('hidden', alvo !== 'pedidos');
-            document.getElementById('abaCupons').classList.toggle('hidden', alvo !== 'cupons');
-        });
-    });
-
+    document.getElementById('campoDestaque').addEventListener('change', sincronizarCampoOrdem);
     document.getElementById('novoProdutoBtn').addEventListener('click', () => abrirDialogProduto(null));
     document.getElementById('formProduto').addEventListener('submit', salvarProduto);
     document.getElementById('novoCupomBtn').addEventListener('click', () => abrirDialogCupom(null));

@@ -64,7 +64,9 @@ desta tabela.
 | imagem_url | TEXT NOT NULL | URL da imagem (https) |
 | estoque | INTEGER NOT NULL CHECK (estoque >= 0) | Saldo disponível |
 | ativo | BOOLEAN NOT NULL DEFAULT TRUE | Produtos inativos somem da vitrine e do checkout |
-| tags | TEXT[] NOT NULL DEFAULT '{}' | Rótulos de busca, com índice GIN |
+| destaque | BOOLEAN NOT NULL DEFAULT FALSE | Aparece na home, se também estiver `ativo`. Curado no painel |
+| ordem_destaque | INTEGER | Posição na home (menor primeiro; `NULL` vai para o fim). Fica `NULL` quando `destaque = FALSE` |
+| tags | TEXT[] NOT NULL DEFAULT '{}' | Rótulos de busca, com índice GIN. O catálogo busca por nome, descrição e tag |
 | criado_em | TIMESTAMP | Data/hora da criação |
 | atualizado_em | TIMESTAMP | Última atualização |
 
@@ -268,13 +270,13 @@ No deploy isso já acontece sozinho: o `startCommand` do `render.yaml` roda
 | `migrations/006_reconcilia_placas_duplicadas.sql` | Reconcilia duas placas de vídeo que já existiam cadastradas à mão |
 | `migrations/007_pagina_de_produto.sql` | Adiciona `preco_original` e `especificacoes` em produtos, e cria `produto_imagens` e `avaliacoes` |
 | `migrations/008_cupons_de_desconto.sql` | Cria `cupons` e `cupom_usos`, e adiciona `cupom_id`, `desconto` e `cupom_contabilizado` em pedidos |
+| `migrations/009_destaques_e_ordenacao.sql` | Adiciona `produtos.destaque` e `produtos.ordem_destaque`, com índice parcial. Ao criar a coluna — e só então — marca até 8 produtos à venda como destaque, para a home não nascer vazia |
 | `migrations/010_login_com_google.sql` | Torna `usuarios.senha` opcional e adiciona `usuarios.google_id` |
 | `migrations/011_refresh_tokens.sql` | Cria `refresh_tokens`, que guarda as sessões de login |
 | `migrations/012_verificacao_de_email.sql` | Adiciona `usuarios.email_verificado` e cria `verificacoes_email`. As contas que já existiam entram como verificadas, uma única vez |
 
-A 009 está reservada para uma spec que ainda não entrou. A 011 foi escrita antes
-da 008 e da 010; como o runner aplica em ordem alfabética e tudo é idempotente,
-a ordem de chegada dos arquivos não importa.
+A 011 foi escrita antes da 008, da 009 e da 010; como o runner aplica em ordem
+alfabética e tudo é idempotente, a ordem de chegada dos arquivos não importa.
 
 A migration 001 aborta com erro se houver e-mails duplicados em `usuarios`.
 Nesse caso, consolide os registros antes de aplicá-la.
@@ -309,8 +311,13 @@ inacessível.
 
 | Área | Operações |
 |------|-----------|
-| Produtos | Criar, editar, excluir; ajustar preço, estoque, categoria, imagem e descrição; tirar de circulação sem excluir |
+| Produtos | Criar, editar, excluir; ajustar preço, estoque, categoria, imagem e descrição; tirar de circulação sem excluir; marcar como destaque da home e definir a posição |
 | Pedidos | Consultar com filtro por status e paginação, e abrir o detalhe com itens e cliente |
+| Cupons | Criar, editar, ativar e desativar (não há exclusão) |
+| Relatórios | Receita e pedidos pagos por período, com gráfico e variação; mais vendidos; parados no estoque; exportação em CSV. Só leitura |
+
+As seções são trocadas pelo menu lateral (botão ☰ no topo), e a aberta fica no
+endereço — `admin.html#relatorios` abre direto nos relatórios.
 
 Pedidos são **somente leitura**. Alterar status de pagamento pela mão criaria
 divergência com o Mercado Pago, que é a fonte de verdade — a sincronização

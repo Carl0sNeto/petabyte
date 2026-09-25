@@ -230,6 +230,233 @@ dialog::backdrop { background: rgba(8, 18, 33, .55); }
     font-size: .87rem;
 }
 
+/* ==========================================================================
+   Menu lateral (substitui as abas)
+   ========================================================================== */
+
+.topo-inicio { display: flex; align-items: center; gap: .6rem; }
+
+/* Três traços desenhados em CSS: o caractere ☰ muda de desenho e de largura
+   conforme a fonte instalada. */
+.menu-botao {
+    width: var(--altura-controle-topo);
+    height: var(--altura-controle-topo);
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border: 1px solid rgba(255, 255, 255, .22);
+    border-radius: var(--raio);
+    background: transparent;
+    cursor: pointer;
+}
+.menu-botao[hidden] { display: none; }
+.menu-botao:hover { background: rgba(255, 255, 255, .09); }
+.menu-botao span,
+.menu-botao span::before,
+.menu-botao span::after {
+    display: block;
+    width: 18px;
+    height: 2px;
+    border-radius: 2px;
+    background: #fff;
+    position: relative;
+}
+.menu-botao span::before,
+.menu-botao span::after { content: ""; position: absolute; left: 0; }
+.menu-botao span::before { top: -6px; }
+.menu-botao span::after { top: 6px; }
+
+/* <dialog> modal na camada do topo: fica fora de qualquer overflow da
+   página. Anula o visual de caixa central dos outros diálogos do painel. */
+dialog.menu-lateral {
+    margin: 0;
+    inset: 0 auto 0 0;
+    height: 100%;
+    max-height: none;
+    width: min(290px, 86vw);
+    border-radius: 0 var(--raio-g) var(--raio-g) 0;
+    background: var(--marca-900);
+    color: #fff;
+}
+dialog.menu-lateral[open] { animation: menu-entra .18s ease-out; }
+@keyframes menu-entra { from { transform: translateX(-100%); } to { transform: none; } }
+
+.menu-lateral-corpo { height: 100%; padding: 1rem .8rem; }
+.menu-lateral-topo {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0 .4rem .9rem;
+    margin-bottom: .6rem;
+    border-bottom: 1px solid rgba(255, 255, 255, .12);
+    font-size: .74rem;
+    font-weight: 700;
+    letter-spacing: .12em;
+    text-transform: uppercase;
+    color: #7f9bc4;
+}
+.menu-lateral-fechar {
+    width: 36px;
+    height: 36px;
+    border: none;
+    border-radius: var(--raio);
+    background: transparent;
+    color: #c8d6ea;
+    font-size: 1.5rem;
+    line-height: 1;
+    cursor: pointer;
+}
+.menu-lateral-fechar:hover { background: rgba(255, 255, 255, .09); color: #fff; }
+
+.menu-lateral ul { list-style: none; margin: 0; padding: 0; display: grid; gap: .2rem; }
+.menu-lateral a {
+    display: flex;
+    align-items: center;
+    gap: .7rem;
+    min-height: 44px;
+    padding: 0 .8rem;
+    border-radius: var(--raio);
+    color: #c8d6ea;
+    font-weight: 600;
+}
+.menu-lateral a:hover { background: rgba(255, 255, 255, .08); color: #fff; text-decoration: none; }
+.menu-lateral a[aria-current="page"] {
+    background: rgba(34, 211, 238, .12);
+    color: #fff;
+    box-shadow: inset 3px 0 0 #22d3ee;
+}
+
+/* ==========================================================================
+   Destaque da home, no formulário e na tabela de produtos
+   ========================================================================== */
+
+.pill-destaque { background: var(--acao-suave); color: var(--acao); }
+
+.campo-destaque { display: flex; align-items: flex-end; }
+.rotulo-caixa {
+    display: flex;
+    align-items: center;
+    gap: .55rem;
+    min-height: 46px;
+    margin: 0;
+    font-size: .9rem;
+    color: var(--texto);
+    cursor: pointer;
+}
+.rotulo-caixa input { width: 18px; height: 18px; min-height: 0; margin: 0; accent-color: var(--acao); }
+input:disabled { background: var(--superficie-2); color: var(--texto-3); }
+
+/* ==========================================================================
+   Relatórios
+   ========================================================================== */
+
+.relatorio-filtros .filtros { margin-bottom: .6rem; }
+.periodo-personalizado {
+    display: flex;
+    align-items: flex-end;
+    gap: .7rem;
+    flex-wrap: wrap;
+    margin-bottom: .6rem;
+}
+.periodo-personalizado > div { width: 170px; }
+.relatorio-rotulo { font-size: .84rem; margin: 0 0 1.1rem; min-height: 1.3em; }
+
+/* Recarga esmaecida: os números anteriores ficam no lugar, sem pular. */
+.relatorio-conteudo { transition: opacity .15s ease; }
+.relatorio-conteudo.recarregando { opacity: .45; }
+
+.cards-resumo {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: .9rem;
+    margin-bottom: 1.4rem;
+}
+.cartao-resumo {
+    border: 1px solid var(--borda);
+    border-radius: var(--raio);
+    background: var(--superficie-2);
+    padding: .9rem 1rem;
+    display: flex;
+    flex-direction: column;
+    gap: .2rem;
+    min-width: 0;
+}
+.cartao-rotulo { font-size: .8rem; font-weight: 700; color: var(--texto-2); }
+.cartao-valor { font-size: 1.55rem; font-weight: 700; letter-spacing: -.02em; line-height: 1.2; }
+.cartao-variacao { font-size: .8rem; display: flex; flex-wrap: wrap; gap: .1rem .4rem; }
+.variacao { font-weight: 700; }
+.variacao.sobe { color: var(--sucesso); }
+.variacao.desce { color: var(--erro); }
+.variacao.neutra { color: var(--texto-2); font-weight: 600; }
+.variacao-referencia { color: var(--texto-3); }
+
+.grafico-titulo { font-size: .98rem; margin: 0; }
+.grafico-nota { font-size: .8rem; margin: .1rem 0 .7rem; }
+
+.grafico { position: relative; min-height: 240px; border-radius: var(--raio); }
+.grafico svg { display: block; overflow: visible; }
+.grafico:focus-visible { outline-offset: 4px; }
+
+.grafico .eixo-grade { stroke: var(--borda); stroke-width: 1; }
+.grafico .eixo-base { stroke: var(--borda-forte); stroke-width: 1; }
+.grafico .eixo-rotulo { fill: var(--texto-2); font-size: 11px; font-variant-numeric: tabular-nums; }
+.grafico .coluna { fill: var(--acao); transition: fill .12s ease; }
+.grafico .coluna.ativa { fill: var(--acao-escura); }
+.grafico .coluna-alvo { fill: transparent; cursor: default; }
+
+.grafico-dica {
+    position: absolute;
+    pointer-events: none;
+    background: var(--marca-900);
+    color: #fff;
+    border-radius: var(--raio);
+    padding: .45rem .65rem;
+    font-size: .8rem;
+    line-height: 1.35;
+    box-shadow: var(--sombra-2);
+    white-space: nowrap;
+    display: flex;
+    flex-direction: column;
+}
+.grafico-dica[hidden] { display: none; }
+.grafico-dica strong { font-size: .95rem; }
+.grafico-dica span { color: #c8d6ea; }
+
+.grafico-vazio {
+    position: absolute;
+    inset: 0 0 28px 68px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    margin: 0;
+    color: var(--texto-2);
+    font-size: .9rem;
+    pointer-events: none;
+}
+
+.grafico-tabela { margin-top: 1rem; font-size: .88rem; }
+.grafico-tabela summary { cursor: pointer; color: var(--acao); font-weight: 600; margin-bottom: .6rem; }
+.grafico-tabela .table-wrap { max-height: 320px; overflow-y: auto; }
+
+.grade-relatorios {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 1.2rem;
+    margin-top: 1.2rem;
+}
+.relatorio-subtitulo { font-size: 1rem; margin: 0 0 .2rem; }
+.relatorio-nota { font-size: .8rem; margin: 0 0 .8rem; }
+
+@media (max-width: 900px) {
+    .grade-relatorios { grid-template-columns: 1fr; }
+}
+
 @media (max-width: 700px) {
     .form-grid { grid-template-columns: 1fr; }
+    .cards-resumo { grid-template-columns: 1fr; }
+    .cartao-valor { font-size: 1.35rem; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    dialog.menu-lateral[open] { animation: none; }
 }

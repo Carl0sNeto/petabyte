@@ -11,7 +11,14 @@
 <body data-page="admin">
     <header class="topo">
         <div class="container topo-barra">
-            <a class="marca" href="admin.html">Peta<em>byte</em> <span>Painel</span></a>
+            <div class="topo-inicio">
+                <!-- Só aparece depois que o servidor confirma o admin (admin.js). -->
+                <button class="menu-botao" id="menuBotao" type="button" hidden
+                        aria-controls="menuLateral" aria-expanded="false" aria-label="Abrir o menu do painel">
+                    <span aria-hidden="true"></span>
+                </button>
+                <a class="marca" href="admin.html">Peta<em>byte</em> <span>Painel</span></a>
+            </div>
             <nav class="topo-nav">
                 <span class="whoami" id="whoami"></span>
                 <a href="E-Commerce.html">Ver a loja</a>
@@ -33,14 +40,11 @@
         <div id="painel" class="hidden">
             <div id="aviso" class="aviso hidden" role="status"></div>
 
-            <div class="abas" role="tablist">
-                <button class="aba active" type="button" data-aba="produtos" role="tab">Produtos</button>
-                <button class="aba" type="button" data-aba="pedidos" role="tab">Pedidos</button>
-                <button class="aba" type="button" data-aba="cupons" role="tab">Cupons</button>
-            </div>
+            <!-- As seções são trocadas pelo menu lateral (#menuLateral). Cada
+                 uma é independente: nada aqui depende da ordem entre elas. -->
 
             <!-- ---------- Produtos ---------- -->
-            <section id="abaProdutos" class="card">
+            <section id="abaProdutos" class="card" data-secao="produtos">
                 <div class="secao-titulo">
                     <h2>Catálogo</h2>
                     <button class="btn btn-primary btn-sm" type="button" id="novoProdutoBtn">Novo produto</button>
@@ -57,18 +61,19 @@
                                 <th class="num">Estoque</th>
                                 <th class="num">Vendidos</th>
                                 <th>Situação</th>
+                                <th>Home</th>
                                 <th></th>
                             </tr>
                         </thead>
                         <tbody id="listaProdutos">
-                            <tr><td colspan="9" class="muted">Carregando...</td></tr>
+                            <tr><td colspan="10" class="muted">Carregando...</td></tr>
                         </tbody>
                     </table>
                 </div>
             </section>
 
             <!-- ---------- Pedidos ---------- -->
-            <section id="abaPedidos" class="card hidden">
+            <section id="abaPedidos" class="card hidden" data-secao="pedidos">
                 <div class="secao-titulo">
                     <h2>Pedidos</h2>
                     <div class="filtros">
@@ -105,7 +110,7 @@
             </section>
 
             <!-- ---------- Cupons ---------- -->
-            <section id="abaCupons" class="card hidden">
+            <section id="abaCupons" class="card hidden" data-secao="cupons">
                 <div class="secao-titulo">
                     <h2>Cupons de desconto</h2>
                     <button class="btn btn-primary btn-sm" type="button" id="novoCupomBtn">Novo cupom</button>
@@ -133,8 +138,114 @@
                     </table>
                 </div>
             </section>
+
+            <!-- ---------- Relatórios ---------- -->
+            <section id="abaRelatorios" class="hidden" data-secao="relatorios">
+                <div class="card">
+                    <div class="secao-titulo">
+                        <h2>Relatórios</h2>
+                        <!-- Link comum: baixa sem JavaScript. admin-relatorios.js
+                             mantém o período no href e renova a sessão antes. -->
+                        <a class="btn btn-secondary btn-sm" id="exportarCsv" href="/admin/relatorios/exportar">Exportar CSV</a>
+                    </div>
+
+                    <div class="relatorio-filtros">
+                        <div class="filtros" role="group" aria-label="Período do relatório">
+                            <button class="filtro-btn" type="button" data-periodo="7" aria-pressed="false">7 dias</button>
+                            <button class="filtro-btn active" type="button" data-periodo="30" aria-pressed="true">30 dias</button>
+                            <button class="filtro-btn" type="button" data-periodo="90" aria-pressed="false">90 dias</button>
+                            <button class="filtro-btn" type="button" data-periodo="personalizado" aria-pressed="false"
+                                    aria-controls="periodoPersonalizado">Personalizado</button>
+                        </div>
+                        <form id="periodoPersonalizado" class="periodo-personalizado hidden">
+                            <div>
+                                <label for="campoInicio">De</label>
+                                <input id="campoInicio" type="date" required>
+                            </div>
+                            <div>
+                                <label for="campoFim">Até</label>
+                                <input id="campoFim" type="date" required>
+                            </div>
+                            <button class="btn btn-primary btn-sm" type="submit">Aplicar</button>
+                        </form>
+                        <p class="muted relatorio-rotulo" id="rotuloPeriodo" aria-live="polite"></p>
+                    </div>
+
+                    <div id="relatorioErro" class="aviso aviso-erro hidden"></div>
+
+                    <div class="relatorio-conteudo" id="relatorioVendas">
+                        <div class="cards-resumo" id="cardsResumo"></div>
+
+                        <div class="grafico-bloco">
+                            <h3 class="grafico-titulo" id="graficoTitulo">Receita por dia</h3>
+                            <p class="muted grafico-nota">Produtos vendidos, sem frete e já descontado o cupom. Só pedidos pagos.</p>
+                            <div class="grafico" id="graficoVendas"></div>
+                            <details class="grafico-tabela">
+                                <summary>Ver os dados em tabela</summary>
+                                <div class="table-wrap">
+                                    <table>
+                                        <thead><tr><th id="colunaPeriodo">Dia</th><th class="num">Receita</th><th class="num">Pedidos</th></tr></thead>
+                                        <tbody id="tabelaSerie"></tbody>
+                                    </table>
+                                </div>
+                            </details>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="grade-relatorios">
+                    <div class="card">
+                        <h3 class="relatorio-subtitulo">Mais vendidos no período</h3>
+                        <p class="muted relatorio-nota">Receita de cada produto antes do cupom, que vale para o pedido inteiro.</p>
+                        <div class="table-wrap">
+                            <table>
+                                <thead><tr><th>Produto</th><th class="num">Qtd.</th><th class="num">Receita</th></tr></thead>
+                                <tbody id="listaMaisVendidos">
+                                    <tr><td colspan="3" class="muted">Carregando...</td></tr>
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+
+                    <div class="card">
+                        <h3 class="relatorio-subtitulo">Parados no estoque</h3>
+                        <p class="muted relatorio-nota" id="notaParados">
+                            Considera todo o histórico de vendas, não o período selecionado acima.
+                        </p>
+                        <div class="table-wrap">
+                            <table>
+                                <thead><tr><th>Produto</th><th class="num">Estoque</th><th>Última venda</th></tr></thead>
+                                <tbody id="listaParados">
+                                    <tr><td colspan="3" class="muted">Carregando...</td></tr>
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+            </section>
         </div>
     </main>
+
+    <!-- ---------- Menu lateral ----------
+         Um <dialog> modal: vai para a camada do topo da página, fora de
+         qualquer elemento com overflow — foi um overflow que escondeu o menu
+         da conta na loja. Esc, foco preso e fundo inerte vêm do navegador. -->
+    <dialog class="menu-lateral" id="menuLateral" aria-labelledby="menuLateralTitulo">
+        <div class="menu-lateral-corpo">
+            <div class="menu-lateral-topo">
+                <span id="menuLateralTitulo">Painel</span>
+                <button class="menu-lateral-fechar" type="button" id="menuFechar" aria-label="Fechar o menu">×</button>
+            </div>
+            <nav aria-label="Seções do painel">
+                <ul>
+                    <li><a href="#produtos" data-secao="produtos"><span aria-hidden="true">📦</span> Produtos</a></li>
+                    <li><a href="#pedidos" data-secao="pedidos"><span aria-hidden="true">🧾</span> Pedidos</a></li>
+                    <li><a href="#cupons" data-secao="cupons"><span aria-hidden="true">🏷️</span> Cupons</a></li>
+                    <li><a href="#relatorios" data-secao="relatorios"><span aria-hidden="true">📊</span> Relatórios</a></li>
+                </ul>
+            </nav>
+        </div>
+    </dialog>
 
     <!-- ---------- Modal de produto ---------- -->
     <dialog id="dialogProduto">
@@ -173,6 +284,20 @@
                             <option value="true">À venda</option>
                             <option value="false">Fora do catálogo</option>
                         </select>
+                    </div>
+                    <div class="campo-destaque">
+                        <label class="rotulo-caixa" for="campoDestaque">
+                            <input id="campoDestaque" type="checkbox">
+                            Produto em destaque na home
+                        </label>
+                    </div>
+                    <div>
+                        <label for="campoOrdemDestaque">Ordem no destaque</label>
+                        <input id="campoOrdemDestaque" type="number" step="1" min="0" max="9999"
+                               placeholder="vazio = depois dos numerados" aria-describedby="dicaOrdemDestaque" disabled>
+                        <p id="dicaOrdemDestaque" class="muted" style="font-size:.78rem;margin:.35rem 0 0">
+                            Menor número aparece primeiro. Produto fora do catálogo não aparece na home, mesmo em destaque.
+                        </p>
                     </div>
                     <div class="full">
                         <label for="campoImagem">URL da imagem (https)</label>
@@ -319,5 +444,6 @@
 
     <script src="sessao.js"></script>
     <script src="admin.js"></script>
+    <script src="admin-relatorios.js"></script>
 </body>
 </html>
