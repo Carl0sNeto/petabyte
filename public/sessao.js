@@ -181,7 +181,19 @@ async function chamarApi(caminho, opcoes = {}) {
 
 // Revoga a sessão no servidor antes de limpar o navegador. Antes, sair só
 // apagava o localStorage e o token seguia válido até expirar sozinho.
+//
+// A loja (script.js) pendura em window.aoSairDaConta o que precisa acontecer
+// antes, ainda com sessão: terminar de gravar o carrinho na conta e tirá-lo
+// deste navegador. O painel não tem carrinho e não define nada.
 async function logoutUser() {
+    try {
+        if (typeof window.aoSairDaConta === 'function') {
+            await window.aoSairDaConta();
+        }
+    } catch (erro) {
+        console.error('Não foi possível preparar a saída:', erro);
+    }
+
     try {
         await requisitar('/auth/logout', { method: 'POST' });
     } catch (erro) {
