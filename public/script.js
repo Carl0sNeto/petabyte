@@ -100,9 +100,141 @@ function getCart() {
     }
 }
 
-function saveCart(cart) {
+// O localStorage é a cópia de trabalho: é o que existe sem sessão e o que a
+// página lê na hora. Com sessão, toda mudança também vai para a conta (PUT
+// /carrinho), que é o que outro computador enxerga. sincronizar: false é para
+// quando o carrinho acabou de VIR da conta — devolvê-lo seria eco.
+function saveCart(cart, { sincronizar = true } = {}) {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(cart));
+
+    if (sincronizar && hasValidSession()) {
+        marcarCarrinhoPendente(true);
+        enviarCarrinhoParaConta();
+    }
 }
+
+// --------------------------------------------------------------------------
+// Carrinho na conta
+// --------------------------------------------------------------------------
+
+// Marca que o navegador tem mudança que a conta ainda não recebeu. Fica no
+// localStorage, não na memória: quem clica em "Adicionar" e já abre o
+// carrinho troca de página com a gravação a caminho, e a página nova precisa
+// saber que não pode sobrescrever o carrinho local com o da conta, ainda velho.
+const CARRINHO_PENDENTE_KEY = 'petabyte-cart-pendente';
+
+function carrinhoPendente() {
+    return localStorage.getItem(CARRINHO_PENDENTE_KEY) === '1';
+}
+
+function marcarCarrinhoPendente(pendente) {
+    if (pendente) localStorage.setItem(CARRINHO_PENDENTE_KEY, '1');
+    else localStorage.removeItem(CARRINHO_PENDENTE_KEY);
+}
+
+// Uma gravação por vez. Como o corpo é sempre o carrinho inteiro, as mudanças
+// que chegam durante uma gravação esperam e vão todas juntas na seguinte.
+let gravacaoDoCarrinho = null;
+let carrinhoMudouDuranteGravacao = false;
+
+function enviarCarrinhoParaConta() {
+    if (!hasValidSession()) return Promise.resolve();
+
+    if (gravacaoDoCarrinho) {
+        carrinhoMudouDuranteGravacao = true;
+        return gravacaoDoCarrinho;
+    }
+
+    const enviado = JSON.stringify(getCart());
+
+    gravacaoDoCarrinho = chamarApi('/carrinho', {
+        method: 'PUT',
+        // keepalive: a gravação termina mesmo se a pessoa trocar de página
+        // logo depois do clique.
+        keepalive: true,
+        redirecionarSeDeslogado: false,
+        body: JSON.stringify({ itens: JSON.parse(enviado) })
+    })
+        .then(() => {
+            // Só limpa a marca se nada mudou desde o envio.
+            if (JSON.stringify(getCart()) === enviado) marcarCarrinhoPendente(false);
+        })
+        .catch((erro) => {
+            // Fica marcado como pendente: a próxima página tenta de novo.
+            console.error('Não foi possível salvar o carrinho na conta:', erro);
+        })
+        .finally(() => {
+            gravacaoDoCarrinho = null;
+            if (carrinhoMudouDuranteGravacao) {
+                carrinhoMudouDuranteGravacao = false;
+                enviarCarrinhoParaConta();
+            }
+        });
+
+    return gravacaoDoCarrinho;
+}
+
+// Ao abrir qualquer página com sessão: traz o carrinho da conta, que pode ter
+// mudado em outro computador. Se este navegador tem mudança ainda não gravada,
+// o sentido se inverte — ela vai para a conta, e nada vem.
+// Devolve true quando o carrinho local mudou.
+async function sincronizarCarrinhoComConta() {
+    if (!hasValidSession()) return false;
+
+    if (carrinhoPendente()) {
+        enviarCarrinhoParaConta();
+        return false;
+    }
+
+    try {
+        const dados = await chamarApi('/carrinho', { redirecionarSeDeslogado: false });
+
+        // Um clique durante a consulta vale mais que a resposta dela.
+        if (carrinhoPendente()) return false;
+
+        const antes = JSON.stringify(getCart());
+        saveCart(dados.itens || [], { sincronizar: false });
+        updateCartBadge();
+        return JSON.stringify(getCart()) !== antes;
+    } catch (erro) {
+        console.error('Não foi possível carregar o carrinho da conta:', erro);
+        return false;
+    }
+}
+
+// Logo depois do login: junta o que foi montado no navegador sem sessão com o
+// que já estava na conta. Quem decide a junção é o servidor (pela maior
+// quantidade, sem somar); o resultado vira o carrinho deste navegador.
+async function juntarCarrinhoNoLogin() {
+    try {
+        const dados = await chamarApi('/carrinho/mesclar', {
+            method: 'POST',
+            redirecionarSeDeslogado: false,
+            body: JSON.stringify({ itens: getCart() })
+        });
+
+        saveCart(dados.itens || [], { sincronizar: false });
+        marcarCarrinhoPendente(false);
+    } catch (erro) {
+        // O login já valeu; o carrinho local segue, e a próxima página tenta.
+        console.error('Não foi possível juntar o carrinho com o da conta:', erro);
+        marcarCarrinhoPendente(true);
+    }
+}
+
+// Chamado por logoutUser() (sessao.js) antes de encerrar a sessão. Termina a
+// gravação pendente — ainda há sessão para isso — e depois tira o carrinho
+// deste navegador: ele está salvo na conta, e o próximo a usar este computador
+// não deve encontrá-lo.
+window.aoSairDaConta = async function aoSairDaConta() {
+    if (carrinhoPendente()) {
+        await enviarCarrinhoParaConta();
+    }
+
+    localStorage.removeItem(STORAGE_KEY);
+    marcarCarrinhoPendente(false);
+    esquecerCupom();
+};
 
 function updateCartBadge() {
     const badge = document.getElementById('cartCount');
@@ -261,6 +393,7 @@ async function entrarComGoogle(respostaGoogle) {
         }
 
         salvarUsuarioLocal(dados.usuario);
+        await juntarCarrinhoNoLogin();
         window.location.href = 'E-Commerce.html';
     } catch (error) {
         console.error(error);
@@ -405,6 +538,13 @@ function ligarFormularioCupom() {
             return;
         }
 
+        // Sem item não há o que descontar, e o servidor nem chegaria a
+        // conferir o código: ele ficava guardado e o carrinho dizia "aplicado".
+        if (getCart().length === 0) {
+            avisarCupom('Adicione produtos ao carrinho antes de aplicar um cupom.', 'erro');
+            return;
+        }
+
         campo.value = codigo;
         guardarCupom(codigo);
         avisarCupom('');
@@ -519,7 +659,12 @@ async function tratarRetornoPagamento() {
             });
 
             if (data.status === 'approved') {
-                localStorage.removeItem(STORAGE_KEY);
+                // O servidor já tirou da conta o que foi comprado, e só isso:
+                // o que entrou no carrinho depois de abrir o pagamento fica.
+                // A conta é a referência aqui, então ela vence o local.
+                marcarCarrinhoPendente(false);
+                saveCart([], { sincronizar: false });
+                await sincronizarCarrinhoComConta();
                 esquecerCupom();
                 updateCartBadge();
                 renderCartPage();
@@ -617,6 +762,14 @@ async function renderCartPage() {
     if (itens.length === 0) {
         cartItems.innerHTML = '<p>Seu carrinho está vazio.</p>';
         zerarResumo();
+
+        // Carrinho esvaziado leva o cupom junto: guardado, ele voltaria
+        // "aplicado" no próximo produto, sem nunca ter sido conferido.
+        if (lerCupomSalvo()) {
+            esquecerCupom();
+            const campo = document.getElementById('campoCupom');
+            if (campo) campo.value = '';
+        }
         return;
     }
 
@@ -906,6 +1059,10 @@ document.addEventListener('DOMContentLoaded', () => {
     renderMenuConta();
     renderWelcomeMessage();
 
+    // Em toda página, não só no carrinho: o contador do cabeçalho também
+    // precisa mostrar o que foi adicionado em outro computador.
+    const sincronizacaoDoCarrinho = sincronizarCarrinhoComConta();
+
     const productGrid = document.getElementById('productGrid');
     const newsletterForm = document.getElementById('newsletterForm');
     const loginForm = document.getElementById('loginForm');
@@ -1044,6 +1201,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 if (!response.ok) throw new Error(data.mensagem || 'Erro ao entrar.');
 
                 salvarUsuarioLocal(data.usuario);
+                await juntarCarrinhoNoLogin();
                 alert(data.mensagem || 'Login realizado com sucesso!');
                 window.location.href = 'E-Commerce.html';
             } catch (error) {
@@ -1095,9 +1253,21 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     if (document.body.dataset.page === 'cart') {
+        // O carrinho local aparece na hora; se a conta trouxer outro, a tela
+        // é redesenhada quando ele chegar.
         renderCartPage();
+        sincronizacaoDoCarrinho.then((mudou) => {
+            if (mudou) renderCartPage();
+        });
         tratarRetornoPagamento();
         ligarFormularioCupom();
+
+        const nota = document.getElementById('notaCarrinho');
+        if (nota) {
+            nota.textContent = hasValidSession()
+                ? 'Salvo na sua conta: aparece em qualquer computador onde você entrar'
+                : 'Salvo neste navegador. Entre na sua conta para levá-lo a outros computadores';
+        }
     }
 
     if (document.getElementById('botaoGoogle')) {

@@ -213,6 +213,22 @@ Links de confirmação de e-mail do cadastro com senha. Mesmo desenho de
 | expira_em | TIMESTAMP NOT NULL | 24 horas depois, calculado e comparado no banco |
 | usado_em | TIMESTAMP | Preenchido na confirmação, ou quando um link mais novo substitui este |
 
+### 11. **carrinho_itens**
+O carrinho de quem tem sessão, para aparecer em qualquer computador. Sem
+sessão, o carrinho fica só no navegador. Como lá, nenhum preço é guardado.
+
+| Campo | Tipo | Descrição |
+|-------|------|-----------|
+| usuario_id | INTEGER NOT NULL | FK para usuarios.id (ON DELETE CASCADE). Chave primária junto com produto_id |
+| produto_id | INTEGER NOT NULL | FK para produtos.id (ON DELETE CASCADE): produto excluído sai dos carrinhos |
+| quantidade | INTEGER NOT NULL | De 1 a 10 (CHECK), o mesmo limite do checkout |
+| posicao | INTEGER NOT NULL DEFAULT 0 | Ordem dos itens, a mesma do carrinho enviado |
+| atualizado_em | TIMESTAMP NOT NULL | Data/hora da gravação |
+
+Produto fora do catálogo (`ativo = FALSE`) não aparece na leitura e sai na
+próxima gravação. A aprovação de um pagamento apaga daqui os produtos daquele
+pedido.
+
 ## Como Executar o Script
 
 ### Opção 1: Usando pgAdmin (GUI)
@@ -274,6 +290,7 @@ No deploy isso já acontece sozinho: o `startCommand` do `render.yaml` roda
 | `migrations/010_login_com_google.sql` | Torna `usuarios.senha` opcional e adiciona `usuarios.google_id` |
 | `migrations/011_refresh_tokens.sql` | Cria `refresh_tokens`, que guarda as sessões de login |
 | `migrations/012_verificacao_de_email.sql` | Adiciona `usuarios.email_verificado` e cria `verificacoes_email`. As contas que já existiam entram como verificadas, uma única vez |
+| `migrations/013_carrinho_na_conta.sql` | Cria `carrinho_itens`, o carrinho salvo na conta |
 
 A 011 foi escrita antes da 008, da 009 e da 010; como o runner aplica em ordem
 alfabética e tudo é idempotente, a ordem de chegada dos arquivos não importa.

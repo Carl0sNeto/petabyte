@@ -5,12 +5,12 @@ trás das decisões sobreviva à troca de contexto: se você está lendo isto se
 acompanhado o histórico, comece por aqui.
 
 O companheiro dele é o [`DATABASE.md`](DATABASE.md), que descreve as tabelas
-coluna a coluna, a taxonomia de categorias, as 12 migrations e como criar o
+coluna a coluna, a taxonomia de categorias, as 13 migrations e como criar o
 primeiro administrador. Aqui ficam as decisões e o porquê; lá, o schema.
 
 **Repositório:** https://github.com/Carl0sNeto/petabyte (público)
-**Última revisão deste documento:** 25/09/2026 (relatórios do painel, menu
-lateral, destaques na home e catálogo com busca e paginação).
+**Última revisão deste documento:** 01/10/2026 (carrinho salvo na conta e
+cupom que ficava gravado com o carrinho vazio).
 
 > A data acima já ficou parada em 17/08 enquanto o corpo do arquivo era alterado
 > em 22/08 e 09/09. Se você mexer neste documento, mexa nesta linha junto.
@@ -21,7 +21,7 @@ lateral, destaques na home e catálogo com busca e paginação).
 
 | Camada | Tecnologia |
 |--------|------------|
-| Servidor | Node.js 24 + Express 5, arquivo único `server.js` (~4.400 linhas) |
+| Servidor | Node.js 24 + Express 5, arquivo único `server.js` (~4.550 linhas) |
 | Banco | PostgreSQL, acesso via `pg` sem ORM |
 | Front-end | HTML + CSS + JavaScript puro, sem framework nem build |
 | Pagamento | Mercado Pago (Checkout Pro, por redirecionamento) |
@@ -38,7 +38,7 @@ seguinte.
 
 ```bash
 npm start           # sobe na porta 3000
-npm test            # 157 casos, em série, contra o banco real
+npm test            # 169 casos, em série, contra o banco real
 npm run migrate     # aplica migrations/*.sql em ordem
 npm run criar-admin -- email@exemplo.com    # promove uma conta a administrador
 ```
@@ -109,6 +109,39 @@ Decisões que não são óbvias:
   se descobre cupom no chute. O carrinho revalida o cupom a cada mudança de
   quantidade, e isso, com código real, não gasta nada.
 - **Exige login.** O limite por cliente precisa saber quem é o cliente.
+
+### O carrinho fica salvo na conta, e o navegador é a cópia de trabalho
+
+Sem sessão, o carrinho vive só no `localStorage`, como sempre. Com sessão,
+cada mudança também vai para `carrinho_itens` (`PUT /carrinho`, com o carrinho
+inteiro), e é dali que outro computador o lê. Continua sendo só
+`{ id, quantidade }`: preço nenhum é guardado, nem no banco.
+
+- **No login, os dois se juntam pela maior quantidade de cada produto, nunca
+  pela soma** (`POST /carrinho/mesclar`). O navegador pode ter uma cópia do
+  próprio carrinho da conta — sessão que venceu sem logout —, e somar dobraria
+  tudo a cada login. O preço disso: quem tinha 2 na conta e pôs mais 1 sem
+  sessão fica com 2, não 3.
+- **Sair da conta tira o carrinho do navegador**, depois de terminar de gravar
+  o que estava pendente. Ele está salvo na conta, e o próximo a usar o
+  computador não deve encontrá-lo. `logoutUser()` (`sessao.js`) chama o
+  `window.aoSairDaConta` que `script.js` pendura; o painel não tem carrinho.
+- **A página só puxa o carrinho da conta se o navegador não tem mudança
+  pendente.** A marca `petabyte-cart-pendente` fica no `localStorage`: quem
+  clica em "Adicionar" e abre o carrinho em seguida troca de página com a
+  gravação a caminho (ela vai com `keepalive`), e a página nova não pode
+  sobrescrever o carrinho local com o da conta, ainda velho. Havendo pendência,
+  o sentido se inverte: o local vai para a conta.
+- **O pagamento aprovado tira do carrinho da conta só o que foi comprado**, no
+  servidor, na mesma trava da baixa de estoque — a aprovação pode chegar só
+  pelo webhook, com a aba fechada. O que entrou no carrinho depois de abrir o
+  pagamento fica.
+- **Gravar troca o carrinho inteiro**, numa transação com trava na linha do
+  usuário: duas abas gravando juntas se cruzariam em violação de chave
+  primária. Produto inexistente ou fora do catálogo é descartado na gravação.
+- **O cupom não vai para a conta.** Continua em `sessionStorage`, por aba, e
+  sai junto quando o carrinho esvazia — guardado num carrinho vazio, ele
+  voltava "aplicado" no produto seguinte sem nunca ter sido conferido.
 
 ### Baixa de estoque é idempotente
 
@@ -590,7 +623,7 @@ idempotente, então repetir a cada deploy é seguro.
 
 São **de integração**: batem no banco configurado no `.env`, não em mocks.
 
-Onze arquivos, cada um com um `test()` de nível superior e os casos como
+Doze arquivos, cada um com um `test()` de nível superior e os casos como
 subtestes (`await t.test(...)`):
 
 | Arquivo | Casos | Cobre |
@@ -599,6 +632,7 @@ subtestes (`await t.test(...)`):
 | `tests/produto.test.js` | 24 | Página de detalhe, avaliações; destaques da home; catálogo: busca, filtros, ordenação, paginação, `ids` |
 | `tests/checkout.test.js` | 21 | Carrinho, preço do banco, estoque, frete fixo; cupom: desconto, limites, motivos, uso e estorno |
 | `tests/login-google.test.js` | 15 | Criação, vínculo por e-mail (e com conta não confirmada), `aud`/`email_verified`, conta sem senha, desconectar |
+| `tests/carrinho.test.js` | 11 | Carrinho na conta: sessão, isolamento, formato, produto fora do catálogo, junção no login pela maior quantidade, limpeza na aprovação |
 | `tests/relatorios.test.js` | 12 | Receita sem frete e com cupom, só pagos, último dia inteiro, variação, semanal acima de 60 dias, parados, CSV |
 | `tests/auth-sessao.test.js` | 12 | Cookies, rotação, reuso, janela de corrida, logout, CSRF, revogação por senha |
 | `tests/conta.test.js` | 12 | Central da conta: nome, troca de senha, avaliações próprias; cadastro de newsletter |
@@ -607,8 +641,8 @@ subtestes (`await t.test(...)`):
 | `tests/recuperacao.test.js` | 4 | Token gravado como hash, invalidação dos links pendentes |
 | `tests/relatorios-fuso.test.js` | 1 | Dia do relatório no fuso da loja com o banco em UTC, como o Neon |
 
-São 146 subtestes mais os 11 de nível superior — daí os 157 que o runner conta
-(conferido rodando a suíte em 25/09/2026).
+São 157 subtestes mais os 12 de nível superior — daí os 169 que o runner conta
+(conferido rodando a suíte em 01/10/2026).
 
 - **Relatórios somam o banco inteiro**, não só as fixtures. Os pedidos de
   `relatorios.test.js` ficam em 2001, quando a loja não existia, para pedidos
@@ -705,6 +739,9 @@ São nove páginas: `E-Commerce.html` (home com os destaques, servida como
 - `renderDesconto()` em `script.js` é o único lugar que monta preço riscado e
   selo. Página nova que mostre preço (um catálogo, por exemplo) usa ela, não
   refaz a conta.
+- **Carrinho:** `saveCart()` grava no `localStorage` e, com sessão, manda para
+  a conta (ver *O carrinho fica salvo na conta*). Toda página, ao abrir, chama
+  `sincronizarCarrinhoComConta()`; o login, `juntarCarrinhoNoLogin()`.
 - **Cupom no carrinho:** só o código fica guardado, em `sessionStorage`. Cada
   redesenho do carrinho revalida no servidor, e com cupom os três valores
   (subtotal, frete, total) exibidos são os que o servidor devolveu. Um contador

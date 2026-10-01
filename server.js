@@ -822,6 +822,15 @@ async function sincronizarPagamentoNoBanco(pagamento) {
                 }
 
                 await client.query('UPDATE pedidos SET estoque_baixado = TRUE WHERE id = $1', [pedido.id]);
+
+                // O que foi comprado sai do carrinho da conta, na mesma trava
+                // da baixa. Aqui, e não no navegador: a aprovação pode chegar
+                // só pelo webhook, com a aba de pagamento já fechada. Item
+                // adicionado depois de abrir o pagamento fica.
+                await client.query(
+                    'DELETE FROM carrinho_itens WHERE usuario_id = $1 AND produto_id = ANY($2::int[])',
+                    [pedido.usuario_id, itensDoPedido.rows.map((item) => item.produto_id)]
+                );
             }
 
             // Estorno ou cancelamento depois da baixa: devolve ao catálogo.
@@ -4174,6 +4183,145 @@ app.put('/admin/cupons/:id', limitadorAdmin, autenticarToken, exigirAdmin, async
 // Prévia do cupom no carrinho. Não cria pedido nem conta uso: só roda a mesma
 // conta de /pagamentos/criar e devolve o resultado. Exige login porque o
 // limite por cliente precisa saber quem é o cliente.
+// ---------------------------------------------------------------------------
+// Carrinho salvo na conta
+//
+// O navegador continua tendo a cópia de trabalho (localStorage), que é o que
+// funciona sem sessão. Com sessão, cada mudança é gravada aqui inteira, e é
+// daqui que outro computador lê o carrinho. Só id e quantidade, como lá: o
+// preço é lido de produtos na hora de mostrar e de cobrar.
+// ---------------------------------------------------------------------------
+
+// Esvaziar também é gravar: o carrinho vazio é válido aqui, ao contrário do
+// checkout. O resto segue a mesma regra de formato.
+function validarCarrinhoParaGravar(itens) {
+    if (Array.isArray(itens) && itens.length === 0) {
+        return { valido: true };
+    }
+
+    return validarFormatoCarrinho(itens);
+}
+
+// Produto que saiu do catálogo não aparece (nem conta para o limite de 20).
+// Ler não apaga nada; a próxima gravação do carrinho, sim, como o navegador
+// faz com o produto que sumiu.
+async function lerCarrinhoDaConta(usuarioId, executor = pool) {
+    const resultado = await executor.query(
+        `SELECT c.produto_id AS id, c.quantidade
+         FROM carrinho_itens c
+         JOIN produtos p ON p.id = c.produto_id
+         WHERE c.usuario_id = $1 AND p.ativo = TRUE
+         ORDER BY c.posicao, c.atualizado_em`,
+        [usuarioId]
+    );
+
+    return resultado.rows;
+}
+
+// Troca o carrinho inteiro pelo recebido. Produto inexistente ou fora do
+// catálogo é descartado em silêncio, como o carrinho do navegador já faz ao
+// abrir. A trava na linha do usuário serializa duas abas gravando juntas: sem
+// ela, os dois DELETE + INSERT se cruzariam em violação de chave primária.
+async function gravarCarrinhoDaConta(cliente, usuarioId, itens) {
+    await cliente.query('SELECT id FROM usuarios WHERE id = $1 FOR UPDATE', [usuarioId]);
+
+    const ids = itens.map((item) => Number(item.id));
+    const aVenda = await cliente.query(
+        'SELECT id FROM produtos WHERE id = ANY($1::int[]) AND ativo = TRUE',
+        [ids]
+    );
+    const validos = new Set(aVenda.rows.map((linha) => linha.id));
+
+    await cliente.query('DELETE FROM carrinho_itens WHERE usuario_id = $1', [usuarioId]);
+
+    let posicao = 0;
+    for (const item of itens) {
+        const id = Number(item.id);
+        if (!validos.has(id)) continue;
+
+        await cliente.query(
+            `INSERT INTO carrinho_itens (usuario_id, produto_id, quantidade, posicao)
+             VALUES ($1, $2, $3, $4)`,
+            [usuarioId, id, Number(item.quantidade), posicao]
+        );
+        posicao += 1;
+    }
+}
+
+// Junta o carrinho da conta com o que a pessoa montou no navegador antes de
+// entrar. Pela MAIOR quantidade de cada produto, nunca pela soma: o navegador
+// pode ter uma cópia do próprio carrinho da conta (sessão que venceu sem
+// logout), e somar dobraria tudo a cada login. Os itens da conta vêm
+// primeiro; o que passar de 20 produtos fica de fora.
+function mesclarCarrinhos(daConta, doNavegador) {
+    const porId = new Map(daConta.map((item) => [Number(item.id), { id: Number(item.id), quantidade: Number(item.quantidade) }]));
+
+    for (const item of doNavegador) {
+        const id = Number(item.id);
+        const quantidade = Number(item.quantidade);
+        const existente = porId.get(id);
+
+        if (existente) {
+            existente.quantidade = Math.min(LIMITE_QUANTIDADE_ITEM, Math.max(existente.quantidade, quantidade));
+        } else {
+            porId.set(id, { id, quantidade });
+        }
+    }
+
+    return [...porId.values()].slice(0, LIMITE_ITENS_CARRINHO);
+}
+
+app.get('/carrinho', autenticarToken, async (req, res) => {
+    try {
+        return res.json({ itens: await lerCarrinhoDaConta(req.usuario.id) });
+    } catch (erro) {
+        console.error('Erro ao ler o carrinho da conta:', erro);
+        return res.status(500).json({ mensagem: 'Não foi possível carregar o carrinho.' });
+    }
+});
+
+// O corpo é o carrinho inteiro, não um item: gravar de novo o mesmo carrinho
+// não muda nada, e a ordem de chegada de duas gravações não deixa resto.
+async function responderGravacaoDeCarrinho(req, res, montar) {
+    const itens = req.body && req.body.itens;
+    const validacao = validarCarrinhoParaGravar(itens);
+
+    if (!validacao.valido) {
+        return res.status(400).json({ mensagem: validacao.mensagem });
+    }
+
+    const cliente = await pool.connect();
+
+    try {
+        await cliente.query('BEGIN');
+        const final = await montar(cliente, itens);
+        await gravarCarrinhoDaConta(cliente, req.usuario.id, final);
+        const gravado = await lerCarrinhoDaConta(req.usuario.id, cliente);
+        await cliente.query('COMMIT');
+
+        return res.json({ itens: gravado });
+    } catch (erro) {
+        await cliente.query('ROLLBACK').catch(() => {});
+        console.error('Erro ao gravar o carrinho da conta:', erro);
+        return res.status(500).json({ mensagem: 'Não foi possível salvar o carrinho.' });
+    } finally {
+        cliente.release();
+    }
+}
+
+app.put('/carrinho', autenticarToken, (req, res) =>
+    responderGravacaoDeCarrinho(req, res, async (cliente, itens) => itens));
+
+// Chamada logo depois do login, com o carrinho que estava no navegador.
+app.post('/carrinho/mesclar', autenticarToken, (req, res) =>
+    responderGravacaoDeCarrinho(req, res, async (cliente, itens) => {
+        // Lido sob a mesma trava da gravação: entre ler e gravar, outra aba
+        // não muda o carrinho da conta por baixo.
+        await cliente.query('SELECT id FROM usuarios WHERE id = $1 FOR UPDATE', [req.usuario.id]);
+        const daConta = await lerCarrinhoDaConta(req.usuario.id, cliente);
+        return mesclarCarrinhos(daConta, itens);
+    }));
+
 app.post('/cupons/validar', limitadorCupom, autenticarToken, async (req, res) => {
     const corpo = req.body || {};
 
